@@ -2,13 +2,13 @@ module.exports = {
   apps: [
     {
       name: "my-next-app",
-      script: "node_modules/next/dist/bin/next", // Direct path to the next executable
-      args: "start",                             // The command argument
-      instances: "max",                          // Use max CPU cores (Cluster Mode)
-      exec_mode: "cluster",                      // Recommended for performance
+      script: "node_modules/next/dist/bin/next",
+      args: "start",                            
+      instances: "max",                         
+      exec_mode: "cluster",                     
       env: {
         NODE_ENV: "production",
-        PORT: 6677 // Or your desired port
+        PORT: 6677
       }
     }
   ]
