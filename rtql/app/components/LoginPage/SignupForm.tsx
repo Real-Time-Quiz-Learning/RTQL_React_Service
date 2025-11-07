@@ -41,6 +41,8 @@ const SignupForm: React.FC<SignupFormProps> = ({ onSwitch }) => {
         throw new Error(data?.message || `Signup failed (${res.status})`);
       }
       // On success, navigate to the post-auth page (home by default)
+      let token = await res.json();
+      localStorage.setItem('token', JSON.stringify(token));
       navigate('/');
     } catch (err: any) {
       setError(err?.message || 'Signup Failed');
