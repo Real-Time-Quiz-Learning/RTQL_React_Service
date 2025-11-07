@@ -1,4 +1,4 @@
-import { FeatureCardProps } from '../types/global';
+import type { FeatureCardProps } from '../types/global';
 import ZapIcon from "../icons/ZapIcon"
 import UsersIcon from "../icons/UserIcon"
 import BarChartIcon from "../icons/BarChartIcon"

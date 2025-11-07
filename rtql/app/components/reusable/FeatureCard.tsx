@@ -1,5 +1,5 @@
 import React from 'react';
-import { FeatureCardProps } from '../types/global';
+import type { FeatureCardProps } from '../types/global';
 
 const FeatureCard: React.FC<FeatureCardProps> = ({ icon: Icon, title, description }) => (
   <div className="bg-white p-6 md:p-8 rounded-xl shadow-lg border border-gray-100 transition duration-300 hover:shadow-xl hover:scale-[1.02]">
