@@ -32,7 +32,9 @@ const API_ENDPOINT = 'http://64.181.233.131:3677/question/send';
 const getAuthToken = (): string | null => {
     try {
         // Check for token under a common key name
-        return localStorage.getItem('token');
+        const localToken = localStorage.getItem("token");
+        const userToken = JSON.parse(localToken||'null')?.token || null;
+        return userToken;
     } catch (e) {
         console.error("Could not access localStorage:", e);
         return null;
