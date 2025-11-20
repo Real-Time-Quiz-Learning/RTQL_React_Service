@@ -88,8 +88,10 @@ const generateQuestion = async (prompt: string): Promise<Question> => {
     }
     
     const payload = {
-        prompt: prompt,
+        input: prompt,
+        questions: 3
     };
+
 
     
     console.log("Sending prompt to API:", prompt);
