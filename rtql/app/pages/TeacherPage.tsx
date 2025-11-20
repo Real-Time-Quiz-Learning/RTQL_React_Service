@@ -81,8 +81,7 @@ const generateQuestion = async (prompt: string): Promise<Question> => {
 
     // Conditionally add the Authorization header
     if (token) {
-        // Assuming a Bearer token scheme as is typical for JWTs
-        headers['Authorization'] = `Bearer ${token}`;
+        headers['token'] = `${token}`;
         console.log("Authorization token included in request headers.");
     } else {
         console.warn("No authentication token found in localStorage. Request might fail due to lack of Authorization header.");
@@ -92,14 +91,15 @@ const generateQuestion = async (prompt: string): Promise<Question> => {
         prompt: prompt,
     };
 
+    
     console.log("Sending prompt to API:", prompt);
-
     const response = await fetchWithRetry(API_ENDPOINT, {
         method: 'POST',
         headers: headers, // Use the updated headers object
         body: JSON.stringify(payload),
     });
-
+    
+    console.log(response);
     const data = await response.json();
     
     // --- START: Parsing Logic for the nested response structure ---
