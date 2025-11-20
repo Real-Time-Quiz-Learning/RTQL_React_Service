@@ -83,7 +83,7 @@ const generateQuestion = async (prompt: string): Promise<Question> => {
 
     // Conditionally add the Authorization header
     if (token) {
-        headers['token'] = `${token}`;
+        headers['Authorization'] = `Bearer ${token}`;
         console.log("Authorization token included in request headers.");
     } else {
         console.warn("No authentication token found in localStorage. Request might fail due to lack of Authorization header.");
