@@ -76,7 +76,7 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                         rows={4}
                         className="w-full border border-gray-300 rounded-xl p-3 mb-4 text-base text-gray-900 focus:ring-indigo-500 shadow-inner resize-none"
                         placeholder="Enter lecture content or a specific prompt for the AI to generate a quiz question (e.g., 'Summarize the causes of the French Revolution')."
-                        disabled={isGenerating || isRecording || !quizActive}
+                        disabled={!quizActive}
                     />
                     
                     {/* STT Status/Pending Generation Box */}
@@ -88,7 +88,7 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                                     <path fillRule="evenodd" d="M5.5 8A4.5 4.5 0 0110 3.5v1A3.5 3.5 0 006.5 8h-1zm9 0h-1A3.5 3.5 0 0010 4.5v-1A4.5 4.5 0 0114.5 8z" clipRule="evenodd" />
                                     <path d="M4 12a1 1 0 011-1h10a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1v-2z" />
                                 </svg>
-                                Recording Lecture... (Max 30 seconds)
+                                Recording Lecture...
                             </p>
                         ) : isGenerating ? (
                             <p className="animate-pulse flex items-center text-indigo-600 font-bold">
@@ -127,7 +127,7 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                             isRecording ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
                             } disabled:bg-gray-400 transform hover:scale-[1.02]`}
                             // Disable recording if manual prompt is entered, or if generating/recording is active
-                            disabled={!quizActive || isGenerating || manualPrompt.trim().length > 0}
+                            disabled={!quizActive}
                         >
                             {isRecording ? 'STOP RECORDING' : 'START RECORDING'}
                         </button>

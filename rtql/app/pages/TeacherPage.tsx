@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import QuizStatusControl from '../components/TeacherPage/QuizStatusControl';
 import QuestionInput from '../components/TeacherPage/QuestionInput';
 import OverseerPanel from '../components/TeacherPage/OverseerPanel';
@@ -16,6 +16,14 @@ interface Question {
     timestamp: string;
     isEdited?: boolean;
 }
+// This is necessary because SpeechRecognition is not standard in global type definitions.
+declare global {
+    interface Window {
+        SpeechRecognition: any; // Allow the standard name
+        webkitSpeechRecognition: any; // Allow the prefixed name
+    }
+}
+
 
 // --- Global Utilities ---
 const MOCK_USER_ID = 'teacher-12345-mock-id';
@@ -27,13 +35,11 @@ const API_ENDPOINT = 'http://64.181.233.131:3677/question/send';
 
 /**
  * Helper to safely retrieve the authentication token from localStorage.
- * NOTE: Replace 'auth_token' with your actual key name if different.
  */
 const getAuthToken = (): string | null => {
     try {
-        // Check for token under a common key name
         const localToken = localStorage.getItem("token");
-        const userToken = JSON.parse(localToken||'null')?.token || null;
+        const userToken = JSON.parse(localToken || 'null')?.token || null;
         return userToken;
     } catch (e) {
         console.error("Could not access localStorage:", e);
@@ -42,14 +48,13 @@ const getAuthToken = (): string | null => {
 };
 
 /**
- * Helper for fetching with exponential backoff (up to 5 attempts) to handle transient errors.
+ * Helper for fetching with exponential backoff.
  */
 async function fetchWithRetry(url: string, options: RequestInit, retries = 5): Promise<Response> {
     for (let i = 0; i < retries; i++) {
         try {
             const response = await fetch(url, options);
             if (!response.ok) {
-                // Throw an error to trigger the retry logic, unless it's the last attempt
                 if (i < retries - 1) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 } else {
@@ -58,16 +63,15 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 5): P
             }
             return response;
         } catch (error) {
-            // Only retry if it's not the final attempt
             if (i < retries - 1) {
-                const delayTime = 2 ** i * 1000 + Math.random() * 500; // Exponential backoff with jitter
+                const delayTime = 2 ** i * 1000 + Math.random() * 500;
                 await delay(delayTime);
             } else {
-                throw error; // Re-throw the error on the final attempt
+                throw error;
             }
         }
     }
-    throw new Error('Exhausted all retries.'); // Should be unreachable
+    throw new Error('Exhausted all retries.');
 }
 
 /**
@@ -75,71 +79,52 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 5): P
  */
 const generateQuestion = async (prompt: string): Promise<Question> => {
     const token = getAuthToken();
-    
-    // Define the base headers
+
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
     };
 
-    // Conditionally add the Authorization header
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
-        console.log("Authorization token included in request headers.");
-    } else {
-        console.warn("No authentication token found in localStorage. Request might fail due to lack of Authorization header.");
     }
-    
+
     const payload = {
         input: prompt,
         questions: 3
     };
 
-    console.log("Request Headers:", headers);
-    console.log("Request Payload:", payload);
-
-    
-    console.log("Sending prompt to API:", prompt);
     const response = await fetchWithRetry(API_ENDPOINT, {
         method: 'POST',
-        headers: headers, // Use the updated headers object
+        headers: headers,
         body: JSON.stringify(payload),
     });
-    
-    console.log(response);
+
     const data = await response.json();
-    
-    // --- START: Parsing Logic for the nested response structure ---
-    // The previous fix assumed the response had a 'questions' array
-    const questionsArray = data.questions; 
+
+    const questionsArray = data.questions;
 
     if (!Array.isArray(questionsArray) || questionsArray.length === 0) {
         throw new Error("API returned an invalid format or no questions were generated. Check the response message for details.");
     }
-    
-    // Use the first question in the array as the draft
+
     const firstApiQuestion = questionsArray[0];
 
-    // Map the API response data to the local Question interface,
-    // adding necessary client-side fields (ID, timestamp, and defaults for missing fields).
     const newQuestion: Question = {
         id: generateUniqueId(),
-        text: firstApiQuestion.question, // Map 'question' to 'text'
+        text: firstApiQuestion.question,
         options: firstApiQuestion.options,
         correct: firstApiQuestion.correct,
-        
-        // Provide defaults for fields not returned by the current API response
+
         explanation: 'Explanation to be added by the teacher or AI upon request.',
-        topic: prompt, // Use the prompt as a default topic
-        
+        topic: prompt,
+
         timestamp: new Date().toISOString(),
     };
-    // --- END: Parsing Logic ---
 
-    // Basic validation check
     if (!newQuestion.text || !Array.isArray(newQuestion.options) || newQuestion.options.length < 4) {
-         throw new Error("Invalid question structure returned from the AI.");
+        throw new Error("Invalid question structure returned from the AI.");
     }
-    
+
     return newQuestion;
 };
 
@@ -149,86 +134,169 @@ const generateQuestion = async (prompt: string): Promise<Question> => {
 // -----------------------------------------------------------
 const TeacherPage: React.FC = () => {
     const [quizActive, setQuizActive] = useState<boolean>(false);
-    const [questions, setQuestions] = useState<Question[]>([]); // Array of published questions
-    const [questionForReview, setQuestionForReview] = useState<Question | null>(null); // The question draft currently being reviewed/edited
+    const [questions, setQuestions] = useState<Question[]>([]);
+    const [questionForReview, setQuestionForReview] = useState<Question | null>(null);
 
     // UI States for Generator
     const [isRecording, setIsRecording] = useState<boolean>(false);
     const [isGenerating, setIsGenerating] = useState<boolean>(false);
-    const [transcribedText, setTranscribedText] = useState<string>('');
+    // Transcribed text is now managed by manualPrompt
     const [manualPrompt, setManualPrompt] = useState<string>('');
     const [error, setError] = useState<string>('');
 
-    const userId: string = MOCK_USER_ID; // Mock user ID for display
+    // Ref for the Speech Recognition Instance
+    const recognitionRef = useRef<any>(null);
 
-    // --- Core Handlers (Passed Down) ---
-
-    // Handler for Quiz Activation/Deactivation
-    const handleQuizControl = useCallback((willBeActive: boolean) => {
-        setQuizActive(willBeActive);
-        if (!willBeActive) {
-            // Optional: Clear review draft when quiz ends
-            setQuestionForReview(null);
-            setIsRecording(false);
-            setIsGenerating(false);
-            setTranscribedText('');
-            setManualPrompt('');
-        }
-    }, []);
+    const userId: string = MOCK_USER_ID;
 
     // Triggers AI Generation based on a text prompt (voice or manual)
-    const triggerAiQuestion = async (prompt: string) => {
+    const triggerAiQuestion = useCallback(async (prompt: string) => {
         if (!prompt.trim()) {
             setError('Prompt cannot be empty.');
             return;
         }
+        // Ensure manualPrompt state reflects the latest prompt used for generation
+        setManualPrompt(prompt);
 
         setIsGenerating(true);
         setError('');
 
         try {
-            // Use the real API call
-            const newQuestion = await generateQuestion(prompt); 
+            const newQuestion = await generateQuestion(prompt);
             setQuestionForReview(newQuestion);
         } catch (err) {
             console.error("AI Generation Error:", err);
             setError(`Failed to generate question. Error: ${err instanceof Error ? err.message : 'Unknown API error'}`);
         } finally {
             setIsGenerating(false);
+            // Keep manualPrompt content for potential editing
+        }
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        // Define the API object now that we are sure we are in the browser
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            setError("Speech Recognition is not supported by this browser.");
+            return;
+        }
+
+
+        const recognition = new SpeechRecognition();
+
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event: any) => {
+            let finalTranscript = '';
+            let interimTranscript = '';
+
+            // Iterate through all results received since the last result event
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalTranscript += transcript;
+                } else {
+                    interimTranscript += transcript;
+                }
+            }
+            if (finalTranscript.trim().length > 0) {
+                setManualPrompt(prevPrompt => {
+                    // Append the new final transcript segment to the previous prompt
+                    const basePrompt = prevPrompt.trim();
+                    if (basePrompt.length > 0 && !basePrompt.endsWith('.')) {
+                        // Add a space if the previous text wasn't empty or punctuated
+                        return basePrompt + ' ' + finalTranscript.trim();
+                    }
+                    return basePrompt + finalTranscript.trim();
+                });
+            }
+        };
+
+        recognition.onerror = (event: any) => {
+            console.error("Speech Recognition Error:", event.error);
+            setError(`Microphone error: ${event.error}. Check permissions.`);
+            setIsRecording(false);
+        };
+
+        recognition.onend = () => {
+            // Ensure recording is stopped if not already handled by onresult/onerror
+            if (isRecording) {
+                console.log("Recording ended.");
+                setIsRecording(false);
+            }
+        };
+        recognition.onaudiostart = () => {
+            // Confirms the browser successfully opened the microphone.
+            console.log('Audio Input Detected: Microphone is open.');
+        };
+
+        recognition.onspeechstart = () => {
+            // Confirms the API registered sound above the noise threshold.
+            console.log('Speech Detected: Sound is being processed.');
+        };
+
+        recognitionRef.current = recognition;
+
+        // Cleanup on unmount
+        return () => {
+            if (recognitionRef.current) {
+                // Stop the recognition service if it's active
+                try {
+                    recognitionRef.current.stop();
+                } catch (e) {
+                    // Ignore errors if recognition wasn't running
+                }
+            }
+        };
+        // Include dependencies used within the effect
+    }, [triggerAiQuestion, isRecording]);
+
+    // Handler for Quiz Activation/Deactivation
+    const handleQuizControl = useCallback((willBeActive: boolean) => {
+        setQuizActive(willBeActive);
+        if (!willBeActive) {
+            setQuestionForReview(null);
+            setIsRecording(false);
+            setIsGenerating(false);
             setManualPrompt('');
         }
-    };
-
-    // Simulates Voice Recording/Transcription and Triggers AI Generation
+    }, []);
     const handleRecordingClick = async () => {
         if (isGenerating) return;
 
+        if (!recognitionRef.current) {
+            setError("Speech Recognition is not ready or supported.");
+            return;
+        }
+
         if (isRecording) {
-            // Stop recording: Simulate transcription
-            setIsRecording(false);
-            // NOTE: Replace this mock transcription with actual voice-to-text integration
-            const mockTranscription = "Generate a multiple-choice question about the history of the internet.";
-            setTranscribedText(mockTranscription);
-            await triggerAiQuestion(mockTranscription);
+            // Stop recording
+            console.log("Stop Recording clicked. Waiting for transcription results...");
+            recognitionRef.current.stop();
         } else {
-            // Start recording
-            setTranscribedText('');
+            setManualPrompt('');
             setError('');
             setIsRecording(true);
-            
-            // Auto-stop after 3 seconds (mock limit)
-            setTimeout(() => {
-                // Ensure we only stop if the user hasn't manually stopped in the meantime
-                setIsRecording(prev => {
-                    if (prev) {
-                        // Directly call the stop logic to avoid relying on the closure variable
-                        handleRecordingClick();
-                    }
-                    return prev;
-                });
-            }, 3000);
+            try {
+                // Request microphone access (required for the API to work)
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                recognitionRef.current.start();
+                console.log("Speech recognition started...");
+            } catch (err) {
+                // Handle permission denial or no mic found
+                console.error("Microphone access error:", err);
+                setError("Microphone access denied or not available. Check browser settings.");
+                setIsRecording(false);
+            }
         }
     };
+    // ----------------------------------------------------------------------
 
     // Handler for editing the draft question
     const handleQuestionEdit = useCallback((field: 'text' | 'correct' | 'option', value: string | number, optionIndex: number | null = null) => {
@@ -246,7 +314,7 @@ const TeacherPage: React.FC = () => {
                 return { ...prev, [field]: value };
             }
             if (field === 'correct' && typeof value === 'number') {
-                 return { ...prev, [field]: value };
+                return { ...prev, [field]: value };
             }
             return prev;
         });
@@ -256,50 +324,42 @@ const TeacherPage: React.FC = () => {
     const handlePublishQuestion = useCallback(() => {
         if (!questionForReview) return;
 
-        // Check if we are updating an existing question (editing)
         if (questionForReview.id && questions.some(q => q.id === questionForReview.id)) {
-            // Update existing question
-            setQuestions(prev => prev.map(q => 
-                q.id === questionForReview.id 
-                    ? { ...questionForReview, isEdited: true, timestamp: new Date().toISOString() } 
+            setQuestions(prev => prev.map(q =>
+                q.id === questionForReview.id
+                    ? { ...questionForReview, isEdited: true, timestamp: new Date().toISOString() }
                     : q
             ));
         } else {
-            // Publish new question (uses the ID generated in generateQuestion)
             setQuestions(prev => [...prev, questionForReview]);
         }
 
-        // Clear the review draft
+        // Clear the review draft and the prompt text
         setQuestionForReview(null);
-        setTranscribedText('');
+        setManualPrompt('');
     }, [questionForReview, questions]);
 
     // Handler to discard the question draft/cancel edit
     const handleDiscardQuestion = useCallback(() => {
         setQuestionForReview(null);
-        setTranscribedText('');
+        setManualPrompt('');
     }, []);
 
     // Handler to load an existing question into the review panel for editing
     const handleEditQuestion = useCallback((question: Question) => {
         if (!quizActive) {
-            // Using a custom modal is preferred over window.alert
-            console.warn("Please start the quiz before attempting to edit questions.");
             setError("Please start the quiz before attempting to edit questions.");
             return;
         }
-        // Ensure that the explanation is part of the question when editing
         setQuestionForReview({ ...question });
         setError('');
     }, [quizActive]);
 
     // Handler to delete a published question
     const handleDeleteQuestion = useCallback((id: string) => {
-        // NOTE: Using a custom modal/dialog is preferred over window.confirm in production
         const userConfirmed = window.confirm("Are you sure you want to delete this question?");
         if (userConfirmed) {
             setQuestions(prev => prev.filter(q => q.id !== id));
-            // If the deleted question was also the one being edited, clear the editor
             if (questionForReview && questionForReview.id === id) {
                 setQuestionForReview(null);
             }
@@ -309,8 +369,9 @@ const TeacherPage: React.FC = () => {
     // Handler for Manual Prompt Input
     const handlePromptAiClick = () => {
         if (manualPrompt.trim() && quizActive && !isGenerating) {
-            setTranscribedText(''); // Clear voice transcription if manual prompt is used
             triggerAiQuestion(manualPrompt);
+        } else if (!quizActive) {
+            setError("The quiz must be active to generate new questions.");
         }
     };
 
@@ -327,21 +388,22 @@ const TeacherPage: React.FC = () => {
                             Room ID: <span className="font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md text-xs">{userId}</span>
                         </p>
                     </div>
-                    <QuizStatusControl 
-                        quizActive={quizActive} 
-                        handleQuizControl={handleQuizControl} 
+                    <QuizStatusControl
+                        quizActive={quizActive}
+                        handleQuizControl={handleQuizControl}
                     />
                 </header>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    
+
                     {/* Left Column: Question Generator */}
                     <div className="lg:col-span-2 bg-white rounded-xl shadow-xl border border-gray-200">
                         <QuestionInput
                             quizActive={quizActive}
                             isRecording={isRecording}
                             isGenerating={isGenerating}
-                            transcribedText={transcribedText}
+                            // 'transcribedText' now uses the current value of 'manualPrompt'
+                            transcribedText={manualPrompt}
                             error={error}
                             questionForReview={questionForReview}
                             handleRecordingClick={handleRecordingClick}
@@ -356,18 +418,18 @@ const TeacherPage: React.FC = () => {
                             handlePromptAiClick={handlePromptAiClick}
                         />
                     </div>
-                    
+
                     {/* Right Column: Overseer Panel (Leaderboard) */}
                     <div className="lg:col-span-1">
-                        <OverseerPanel 
-                            quizActive={quizActive} 
-                            questionsLength={questions.length} 
+                        <OverseerPanel
+                            quizActive={quizActive}
+                            questionsLength={questions.length}
                         />
                     </div>
                 </div>
-                
+
             </div>
-        <AppFooter /> 
+            <AppFooter />
         </>
     );
 };
