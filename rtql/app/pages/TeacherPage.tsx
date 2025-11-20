@@ -92,6 +92,8 @@ const generateQuestion = async (prompt: string): Promise<Question> => {
         questions: 3
     };
 
+    console.log("Request Headers:", headers);
+    console.log("Request Payload:", payload);
 
     
     console.log("Sending prompt to API:", prompt);
