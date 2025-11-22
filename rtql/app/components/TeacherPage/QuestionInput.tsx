@@ -76,7 +76,6 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                         rows={4}
                         className="w-full border border-gray-300 rounded-xl p-3 mb-4 text-base text-gray-900 focus:ring-indigo-500 shadow-inner resize-none"
                         placeholder="Enter lecture content or a specific prompt for the AI to generate a quiz question (e.g., 'Summarize the causes of the French Revolution')."
-                        disabled={!quizActive}
                     />
                     
                     {/* STT Status/Pending Generation Box */}
@@ -116,7 +115,6 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                             className={`flex-grow px-6 py-3 rounded-full text-white text-lg font-bold transition duration-150 shadow-lg ${
                             !manualPrompt.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
                             } disabled:bg-gray-400 transform hover:scale-[1.02]`}
-                            disabled={!quizActive || isGenerating || isRecording || !manualPrompt.trim()}
                         >
                             PROMPT AI
                         </button>
@@ -127,7 +125,6 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                             isRecording ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
                             } disabled:bg-gray-400 transform hover:scale-[1.02]`}
                             // Disable recording if manual prompt is entered, or if generating/recording is active
-                            disabled={!quizActive}
                         >
                             {isRecording ? 'STOP RECORDING' : 'START RECORDING'}
                         </button>
