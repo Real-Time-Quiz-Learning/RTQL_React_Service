@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AppHeader from '../components/layout/AppHeader'; // Added
 import AppFooter from '../components/layout/AppFooter'; // Added
+import OverseerPanel from '../components/TeacherPage/OverseerPanel';
 import { getSocket, createStudentSocket, setSocket } from '~/lib/socketClient';
 
 interface Question {
@@ -23,6 +24,7 @@ export default function StudentPage() {
   const socketRef = useRef<any>(null);
 
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
+  const currentQuestionRef = useRef<Question | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [answered, setAnswered] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
@@ -45,7 +47,6 @@ export default function StudentPage() {
     const qRoom = state.room ?? params.get('room');
     const qName = state.name ?? params.get('name');
 
-    // --- Helper to set up listeners ---
     const setupListeners = (socket: any) => {
       // ensure listeners are set (remove previous to avoid duplication)
       try {
@@ -54,6 +55,19 @@ export default function StudentPage() {
         socket.off('QuestionPosted');
         socket.off('quizRoomJoinAck');
         socket.off('quizRoomPostQuestion');
+        socket.off('quizRoomQuestionInactive');
+        socket.off('questionInactive');
+        socket.off('markQuestionInactive');
+        socket.off('mark_question_inactive');
+        socket.off('questionMarkedInactive');
+        socket.off('markquestioninactive');
+        socket.off('inactiveQuestion');
+  socket.off('questionClosed');
+  socket.off('closeQuestion');
+  socket.off('questionRemoved');
+  socket.off('questionremoved');
+        socket.off('questionPosted');
+        socket.off('questionposted');
       } catch (e) {}
 
       // Helper to normalize various incoming question payload shapes
@@ -124,10 +138,88 @@ export default function StudentPage() {
         }
       });
 
+      // Teacher may mark a question inactive. Listen for that and remove the question from the student's view.
+      const handleQuestionInactive = (...args: any[]) => {
+        // Scan args to find a qid candidate in multiple possible shapes
+        let foundQid: any = undefined;
+        for (const a of args) {
+          if (a === null || a === undefined) continue;
+          if (typeof a === 'string' || typeof a === 'number') {
+            // a primitive might be qid or roomId; we prefer numeric/short ids that look like a qid
+            // but we can't be certain, so only take it if it matches currentQuestion.id when present
+            const activeQ = currentQuestionRef.current;
+            if (activeQ && String(activeQ.id) === String(a)) {
+              foundQid = a;
+              break;
+            }
+            // otherwise tentatively capture it as a candidate
+            if (!foundQid) foundQid = a;
+          } else if (typeof a === 'object') {
+            // object may directly contain qid/id/questionId or a nested question
+            const candidate = a.qid ?? a.id ?? a.questionId ?? (a.question && (a.question.qid ?? a.question.id));
+            if (candidate) {
+              foundQid = candidate;
+              break;
+            }
+          }
+        }
+
+        if (!foundQid) return;
+        const qidStr = String(foundQid);
+        const activeQ2 = currentQuestionRef.current;
+        if (activeQ2 && String(activeQ2.id) === qidStr) {
+          console.log('[Student] Current question marked inactive by teacher:', qidStr);
+          setCurrentQuestion(null);
+          setSelectedIndex(null);
+          setAnswered(false);
+          setStatusMsg('This question was closed by the teacher.');
+        } else {
+          // If no currentQuestion match, still check if the args indicate deactivation of the last question
+          // For safety: if there is no queued/next question, and the room matches, clear current question.
+          // This handles servers that emit room-only inactive notifications without qid.
+          const roomCandidate = args.find(a => typeof a === 'string' && a === roomId);
+          if (roomCandidate && currentQuestionRef.current) {
+            console.log('[Student] Received room-level inactive for room; clearing current question.');
+            setCurrentQuestion(null);
+            setSelectedIndex(null);
+            setAnswered(false);
+            setStatusMsg('This question was closed by the teacher.');
+          }
+        }
+      };
+
+      // Listen for many possible server event names that signal a question was closed/inactivated
+      const inactiveEventNames = [
+        'quizRoomQuestionInactive', 'questionInactive', 'markQuestionInactive', 'mark_question_inactive',
+        'questionMarkedInactive', 'markquestioninactive', 'inactiveQuestion', 'questionClosed', 'closeQuestion', 'questionRemoved', 'questionremoved'
+      ];
+      inactiveEventNames.forEach(name => socket.on(name, handleQuestionInactive));
+
       // Debug: log any incoming socket events to help trace server behavior
       if (typeof socket.onAny === 'function') {
         socket.onAny((event: string, ...args: any[]) => {
           console.log('[Student] socket event:', event, args);
+          try {
+            const e = String(event || '').toLowerCase();
+            // If the server emits any event whose name suggests inactivity/closure, attempt to clear the current question
+            if (e.includes('inactive') || e.includes('inactivequestion') || e.includes('closed') || e.includes('endquestion')) {
+              // forward to the same handler so we get consistent parsing
+              try {
+                (handleQuestionInactive as any)(...args);
+              } catch (err) {
+                // fallback: clear unconditionally if room matches
+                const roomMatch = args.find((a: any) => typeof a === 'string' && a === roomId);
+                if (roomMatch) {
+                  setCurrentQuestion(null);
+                  setSelectedIndex(null);
+                  setAnswered(false);
+                  setStatusMsg('This question was closed by the teacher.');
+                }
+              }
+            }
+          } catch (e) {
+            // swallow logging errors
+          }
         });
       }
 
@@ -147,8 +239,10 @@ export default function StudentPage() {
         console.error('Socket error', err);
         setStatusMsg('Socket error: ' + String(err));
       });
+      
+      // cleanup for new listeners will be handled in the off calls below
     };
-    // --- End Helper ---
+
 
     if (shared) {
       socketRef.current = shared;
@@ -164,18 +258,25 @@ export default function StudentPage() {
     setStatusMsg('Please join a quiz from the Home page (use JOIN QUIZ).');
   }, [location]);
 
-  // Removed unused joinRoom function
+
+  // Keep a ref updated so socket listeners (which close over a single render) can read latest question
+  useEffect(() => {
+    currentQuestionRef.current = currentQuestion;
+  }, [currentQuestion]);
+
 
   const submitAnswer = () => {
     if (!socketRef.current || !currentQuestion || selectedIndex === null || answered) return;
-    const payload = {
-      roomId,
-      name,
-      qid: currentQuestion.id,
-      answer: selectedIndex,
-      timestamp: new Date().toISOString(),
-    };
-    socketRef.current.emit('quizRoomAnswer', payload);
+
+    // Primary (requested) emit: roomId, { qid, response }
+    try {
+      socketRef.current.emit('quizRoomPostQuestionAnswer', roomId, { qid: currentQuestion.id, response: selectedIndex });
+    } catch (e) {
+      console.warn('Primary emit failed:', e);
+    }
+
+    // (legacy emit removed) Only send the canonical 'quizRoomPostQuestionAnswer' event
+
     setAnswered(true);
     setStatusMsg('Answer submitted.');
   };
@@ -196,9 +297,7 @@ export default function StudentPage() {
   return (
     <>
       <AppHeader />
-      {/* Container class matches TeacherPage/LoginPage min-h-screen bg-gray-100 */}
       <div className="min-h-screen bg-gray-100 font-sans p-4 sm:p-8">
-        {/* Header styling matches TeacherPage header */}
         <header className="bg-white p-4 rounded-t-xl shadow-lg flex justify-between items-center mb-6 border-t-8 border-green-600"> 
           <div className="flex flex-col text-left">
             <h1 className="text-3xl font-extrabold text-gray-900">Student Quiz Portal</h1>
@@ -228,6 +327,7 @@ export default function StudentPage() {
                 <div className='flex flex-col'>
                     <p className="text-lg font-semibold text-gray-800">Welcome, <span className="font-extrabold text-green-600">{name || 'Guest'}</span>!</p>
                     <p className="text-xs text-gray-500 italic mt-1">{statusMsg}</p>
+    
                 </div>
                 <button onClick={handleLeaveRoom} className="text-sm text-red-600 hover:text-red-800 transition duration-150 ease-in-out">
                     Leave Room
@@ -296,7 +396,15 @@ export default function StudentPage() {
               )}
             </div>
             {/* End Main Content Card */}
-
+              {/* Overseer Panel: show student-facing view of live stats */}
+              <div className="mt-6">
+                <OverseerPanel
+                  quizActive={true}
+                  questionsLength={0}
+                  teacherSocket={socketRef.current}
+                  currentRoomId={roomId}
+                />
+              </div>
           </div>
         </div>
 

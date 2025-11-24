@@ -12,6 +12,7 @@ interface Question {
     topic: string;
     timestamp: string;
     isEdited?: boolean;
+    isPersisted?: boolean;
 }
 
 interface QuestionInputProps {
@@ -37,6 +38,8 @@ interface QuestionInputProps {
     handleDeleteQuestion: (id: string) => Promise<void> | void;
     setManualPrompt: React.Dispatch<React.SetStateAction<string>>;
     handlePromptAiClick: () => void;
+    // Create a blank question for manual authoring
+    handleCreateBlankQuestion?: () => void;
 }
 
 const QuestionInput: React.FC<QuestionInputProps> = ({ 
@@ -45,7 +48,7 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
     handlePublishQuestion, handleDiscardQuestion, questions,
     handleEditQuestion, handleDeleteQuestion,
     manualPrompt, setManualPrompt, handlePromptAiClick,
-    handleEmitQuestion, handlePublishFromList
+    handleEmitQuestion, handlePublishFromList, handleCreateBlankQuestion
 }) => {
 
     const questionsLength = questions.length;
@@ -85,45 +88,26 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                         placeholder="Enter lecture content or a specific prompt for the AI to generate a quiz question (e.g., 'Summarize the causes of the French Revolution')."
                     />
                     
-                    {/* STT Status/Pending Generation Box */}
-                    <div className="text-gray-600 text-sm font-medium h-24 flex flex-col items-center justify-center border-2 border-dashed border-indigo-300 w-full rounded-xl mb-4 bg-white shadow-inner">
-                        {isRecording ? (
-                            <p className="animate-pulse flex items-center text-red-600 font-bold">
-                                <svg className="h-6 w-6 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4z" clipRule="evenodd" />
-                                    <path fillRule="evenodd" d="M5.5 8A4.5 4.5 0 0110 3.5v1A3.5 3.5 0 006.5 8h-1zm9 0h-1A3.5 3.5 0 0010 4.5v-1A4.5 4.5 0 0114.5 8z" clipRule="evenodd" />
-                                    <path d="M4 12a1 1 0 011-1h10a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1v-2z" />
-                                </svg>
-                                Recording Lecture...
-                            </p>
-                        ) : isGenerating ? (
-                            <p className="animate-pulse flex items-center text-indigo-600 font-bold">
-                                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                Generating Question from Text...
-                            </p>
-                        ) : (
-                            <p className='text-gray-500'>Enter text above or click "START RECORDING" below to use the microphone.</p>
-                        )}
-                        
-                        {transcribedText && !isGenerating && !questionForReview && (
-                            <p className="mt-2 text-xs text-gray-500 italic px-4">
-                                Transcription: "{transcribedText}" (Generation successful/pending review or failed)
-                            </p>
-                        )}
-                    </div>
-                    
                     {/* Button Row: PROMPT AI and START RECORDING */}
                     <div className="flex space-x-4">
+                        {/* Disable when there's no prompt or while generating */}
                         <button
                             onClick={handlePromptAiClick}
+                            disabled={isGenerating || !manualPrompt.trim()}
+                            aria-busy={isGenerating}
                             className={`flex-grow px-6 py-3 rounded-full text-white text-lg font-bold transition duration-150 shadow-lg ${
-                            !manualPrompt.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
-                            } disabled:bg-gray-400 transform hover:scale-[1.02]`}
+                            (isGenerating || !manualPrompt.trim()) ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
+                            } disabled:bg-gray-400 transform ${isGenerating ? '' : 'hover:scale-[1.02]'}`}
                         >
-                            PROMPT AI
+                            <span className="flex items-center justify-center space-x-2">
+                                {isGenerating && (
+                                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                    </svg>
+                                )}
+                                <span className="font-bold">{isGenerating ? 'GENERATING...' : 'PROMPT AI'}</span>
+                            </span>
                         </button>
                         
                         <button
@@ -134,6 +118,13 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                             // Disable recording if manual prompt is entered, or if generating/recording is active
                         >
                             {isRecording ? 'STOP RECORDING' : 'START RECORDING'}
+                        </button>
+                        
+                        <button
+                            onClick={() => handleCreateBlankQuestion && handleCreateBlankQuestion()}
+                            className={`px-6 py-3 rounded-full text-white text-lg font-bold transition duration-150 shadow-lg bg-yellow-600 hover:bg-yellow-700 transform hover:scale-[1.02]`}
+                        >
+                            CREATE BLANK
                         </button>
                     </div>
                 </div>

@@ -104,8 +104,12 @@ const JoinGameSection: React.FC = () => {
         });
       }
 
-      // Prepare a safe join flow: emit join and only navigate after server ack or explicit join event
-      let joinTimeout: any = null;
+  // Prepare a safe join flow: emit join and only navigate after server ack or explicit join event.
+  // Also add an optimistic fallback navigation in case the server does not send a client ack
+  // but still registers the student (teacher/overseer may see the join).
+  let joinTimeout: any = null;
+  let optimisticNavTimer: any = null;
+  let navigated = false;
 
       const cleanupOnFailure = (reason?: string) => {
         try { socket.disconnect(); } catch (e) {}
@@ -123,9 +127,15 @@ const JoinGameSection: React.FC = () => {
 
       const onJoinAck = (payload?: any) => {
         if (joinTimeout) clearTimeout(joinTimeout);
+        if (optimisticNavTimer) clearTimeout(optimisticNavTimer);
         socket.off('connect_error', onConnectError);
         socket.off('connect', emitJoin);
-        navigate('/student', { state: { room: trimmedRoomCode, name: trimmedUserName } });
+        if (navigated) return;
+        navigated = true;
+        // Navigate with both location state and URL query params so the student page can
+        // recover join info even if navigation state is lost during route transitions.
+        const url = `/student?room=${encodeURIComponent(trimmedRoomCode)}&name=${encodeURIComponent(trimmedUserName)}`;
+        navigate(url, { state: { room: trimmedRoomCode, name: trimmedUserName } });
       };
 
       const emitJoin = () => {
@@ -135,6 +145,7 @@ const JoinGameSection: React.FC = () => {
           console.log('[Join] join ack received:', ack);
           setJoinStatus('ack-received');
           if (joinTimeout) clearTimeout(joinTimeout);
+          if (optimisticNavTimer) clearTimeout(optimisticNavTimer);
           socket.off('quizRoomJoinAck', onJoinAck);
           socket.off('connect_error', onConnectError);
 
@@ -154,13 +165,28 @@ const JoinGameSection: React.FC = () => {
           }
 
           if (isSuccess) {
-            console.log('[Join] ack treated as success, navigating to /student');
-            setTimeout(() => navigate('/student', { state: { room: trimmedRoomCode, name: trimmedUserName } }), 100);
+            if (!navigated) {
+              navigated = true;
+              console.log('[Join] ack treated as success, navigating to /student');
+              const url = `/student?room=${encodeURIComponent(trimmedRoomCode)}&name=${encodeURIComponent(trimmedUserName)}`;
+              setTimeout(() => navigate(url, { state: { room: trimmedRoomCode, name: trimmedUserName } }), 100);
+            }
           } else {
             console.warn('[Join] ack indicates failure', ack);
             cleanupOnFailure(ack?.reason || 'Unknown acknowledgement response from server');
           }
         });
+
+        // Optimistic fallback: if we don't get an ack within a short window but the socket
+        // is connected, navigate anyway (server may have registered the join but not ACKed client).
+        optimisticNavTimer = setTimeout(() => {
+          if (!navigated && socket.connected) {
+            navigated = true;
+            console.warn('[Join] optimistic fallback navigation (no client ack received)');
+            const url = `/student?room=${encodeURIComponent(trimmedRoomCode)}&name=${encodeURIComponent(trimmedUserName)}`;
+            navigate(url, { state: { room: trimmedRoomCode, name: trimmedUserName } });
+          }
+        }, 700);
       };
 
       if (socket.connected) {

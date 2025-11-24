@@ -10,13 +10,15 @@ interface Question {
     topic: string;
     timestamp: string;
     isEdited?: boolean;
+    isPersisted?: boolean; // true when saved to DB
 }
 
 interface QuestionReviewProps {
     questionForReview: Question;
     questionsLength: number;
     handleQuestionEdit: (field: 'text' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
-    handlePublishQuestion: () => void; // Original function for success/publish
+    // Parent handler called after a successful save/update; if qid provided it's a new save
+    handlePublishQuestion: (qid?: string) => void; // Original function for success/publish
     // Called when a publish action should emit the live question to students
     handleEmitQuestion?: (question: Question) => void;
     handleDiscardQuestion: () => void; // This is the original function passed from the parent for local state update
@@ -24,7 +26,8 @@ interface QuestionReviewProps {
 }
 
 // --- API Configuration ---
-const SAVE_API_ENDPOINT = 'http://64.181.233.131:3677/question/update';
+const UPDATE_API_ENDPOINT = 'http://64.181.233.131:3677/question/update';
+const SAVE_API_ENDPOINT = 'http://64.181.233.131:3677/question/save';
 
 const QuestionReview: React.FC<QuestionReviewProps> = ({ 
     questionForReview, 
@@ -36,7 +39,8 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
     handleDeleteQuestion,
 }) => {
     
-    const isEditing = !!questionForReview.id;
+    // Consider a question 'editing' (already persisted) only if it's flagged as persisted
+    const isEditing = !!questionForReview.isPersisted;
     
     const isPublishDisabled = !questionForReview.text || questionForReview.options.some(opt => !opt);
 
@@ -47,7 +51,7 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
     const handlePublishAndSend = async () => {
         
         const conciseQuestion = {
-            qid: questionForReview.id, 
+            qid: questionForReview.id,
             question: questionForReview.text,
             options: questionForReview.options,
             correct: questionForReview.correct
@@ -60,23 +64,36 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
         const authtoken = token ? JSON.parse(token)["token"] || '' : '';
 
         try {
-            const response = await fetch(SAVE_API_ENDPOINT, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'authorization': 'Bearer ' + authtoken,
-                },
-                body: JSON.stringify(conciseQuestion),
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+            let qid: string | undefined = undefined;
+            if (isEditing) {
+                // Existing question: update via PUT
+                const response = await fetch(UPDATE_API_ENDPOINT, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'authorization': 'Bearer ' + authtoken,
+                    },
+                    body: JSON.stringify(conciseQuestion),
+                });
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const result = await response.json();
+                console.log('Question successfully updated on server:', result);
+            } else {
+                // New question: save via POST and obtain qid
+                const response = await fetch(SAVE_API_ENDPOINT, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'authorization': 'Bearer ' + authtoken,
+                    },
+                    body: JSON.stringify({ question: questionForReview.text, options: questionForReview.options, correct: questionForReview.correct }),
+                });
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                qid = data.qid || undefined;
+                console.log('Question successfully saved on server, qid:', qid);
             }
 
-            // Optional: Log success message from server
-            const result = await response.json();
-            console.log("Question successfully saved to server:", result);
-            
             // If this is a publish (not an edit), emit to students first
             if (!isEditing && typeof handleEmitQuestion === 'function') {
                 try {
@@ -87,12 +104,12 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
                 }
             }
 
-            // Call the original prop function to update the parent state (publish/save)
-            handlePublishQuestion(); 
+            // Call the parent handler to update local UI state; pass qid when we created a new record
+            handlePublishQuestion(qid);
 
         } catch (error) {
-            console.error("Failed to save question:", error);
-            alert("Failed to save question. See console for details.");
+            console.error('Failed to save/update question:', error);
+            alert('Failed to save question. See console for details.');
         }
     };
 

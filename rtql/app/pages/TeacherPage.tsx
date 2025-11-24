@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from "socket.io-client";
 import QuizStatusControl from '../components/TeacherPage/QuizStatusControl';
 import QuestionInput from '../components/TeacherPage/QuestionInput';
+import PublishedList from '../components/TeacherPage/PublishedList';
 import OverseerPanel from '../components/TeacherPage/OverseerPanel';
 import AppHeader from '../components/layout/AppHeader';
 import AppFooter from '../components/layout/AppFooter';
@@ -16,6 +17,7 @@ interface Question {
     topic: string;
     timestamp: string;
     isEdited?: boolean;
+    isPersisted?: boolean; // true if saved to DB
 }
 // This is necessary because SpeechRecognition is not standard in global type definitions.
 declare global {
@@ -131,11 +133,20 @@ const generateQuestion = async (prompt: string): Promise<Question[]> => {
 const TeacherPage: React.FC = () => {
     const [quizActive, setQuizActive] = useState<boolean>(false);
     const [questions, setQuestions] = useState<Question[]>([]);
+    const [publishedQuestions, setPublishedQuestions] = useState<Question[]>([]);
     const [questionForReview, setQuestionForReview] = useState<Question | null>(null);
     const [currentRoomId, setCurrentRoomId] = useState<string>('');
     const [authToken, setAuthToken] = useState<string | null>(null);
     const [socketServer, setSocketServer] = useState<any>(null);
-    const [students, setStudents] = useState<Array<{id:string; name:string; score:number; time:number; status:'Active'|'Inactive'}>>([]);
+    const [students, setStudents] = useState<Array<{
+        id: string;
+        name: string;
+        score: number; // kept for backward compatibility (points)
+        correct: number; // number of correct answers
+        totalActiveTime: number; // accumulated seconds active
+        joinedAt?: number; // timestamp when they became active (ms)
+        status: 'Active'|'Inactive'
+    }>>([]);
 
     // Effect 1: Load Auth Token (Runs once on component mount)
     useEffect(() => {
@@ -189,27 +200,59 @@ const TeacherPage: React.FC = () => {
             const student = payload?.student ?? payload;
             const room = payload?.roomId ?? payload?.room;
             if (currentRoomId && room && room !== currentRoomId) return;
+            const now = Date.now();
             setStudents(prev => {
                 const exists = prev.find(s => s.id === student.id);
                 if (exists) {
-                    return prev.map(s => s.id === student.id ? { ...s, status: 'Active', name: student.name ?? s.name } : s);
+                    return prev.map(s => s.id === student.id ? { 
+                        ...s, 
+                        status: 'Active', 
+                        name: student.name ?? s.name,
+                        // resume timing
+                        joinedAt: s.joinedAt ?? now
+                    } : s);
                 }
-                return [...prev, { id: student.id, name: student.name ?? 'Student', score: 0, time: 0, status: 'Active' }];
+                // New student: start joinedAt so active time can be accumulated
+                return [...prev, { 
+                    id: student.id, 
+                    name: student.name ?? 'Student', 
+                    score: 0, 
+                    correct: 0, 
+                    totalActiveTime: 0, 
+                    joinedAt: now, 
+                    status: 'Active' 
+                }];
             });
         };
 
         const handleStudentLeft = (payload: any) => {
             const studentId = payload?.studentId ?? payload?.id;
             if (!studentId) return;
-            setStudents(prev => prev.filter(s => s.id !== studentId));
+            const now = Date.now();
+            setStudents(prev => prev.map(s => {
+                if (s.id !== studentId) return s;
+                // accumulate active time up to this moment and mark inactive
+                const added = s.joinedAt ? Math.floor((now - s.joinedAt) / 1000) : 0;
+                return {
+                    ...s,
+                    totalActiveTime: (s.totalActiveTime || 0) + added,
+                    joinedAt: undefined,
+                    status: 'Inactive'
+                };
+            }));
         };
 
         const handleStudentAnswer = (payload: any) => {
             const sid = payload?.studentId ?? payload?.id;
-            const correct = payload?.correct;
+            const correct = !!payload?.correct;
             const points = typeof payload?.points === 'number' ? payload.points : (correct ? 1 : 0);
             if (!sid) return;
-            setStudents(prev => prev.map(s => s.id === sid ? { ...s, score: Math.min((s.score || 0) + points, questions.length) } : s));
+            setStudents(prev => prev.map(s => {
+                if (s.id !== sid) return s;
+                const newCorrect = s.correct + (correct ? 1 : 0);
+                const newScore = Math.min((s.score || 0) + points, questions.length);
+                return { ...s, correct: newCorrect, score: newScore };
+            }));
         };
 
         socketServer.on('quizRoomCreated', handleRoomCreated);
@@ -281,7 +324,7 @@ const TeacherPage: React.FC = () => {
             if (newQuestions.length > 0) {
                 // Map over the newly generated questions and attempt to save them
                 const savedQuestions = await Promise.all(
-                    newQuestions.map(async (q) => {
+                        newQuestions.map(async (q) => {
                         try {
                             // --- MODIFICATION: Destructure the returned qid from saveQuestion ---
                             const { qid } = await saveQuestion(q);
@@ -289,7 +332,7 @@ const TeacherPage: React.FC = () => {
                             
                             // Return the question object with the new database ID (qid)
                             // replacing the temporary client-side ID (q.id)
-                            return { ...q, id: qid };
+                            return { ...q, id: qid, isPersisted: true };
                         } catch (saveError) {
                             console.error(`Failed to save question ${q.id}:`, saveError);
                             // If saving fails, return the question with its current client-side ID
@@ -485,17 +528,16 @@ const TeacherPage: React.FC = () => {
     }, [questionForReview]);
 
     // Handler to publish or update the question (updates UI/state only)
-    const handlePublishQuestion = useCallback(() => {
+    const handlePublishQuestion = useCallback((qid?: string) => {
         if (!questionForReview) return;
 
-        if (questionForReview.id && questions.some(q => q.id === questionForReview.id)) {
-            setQuestions(prev => prev.map(q =>
-                q.id === questionForReview.id
-                    ? { ...questionForReview, isEdited: true, timestamp: new Date().toISOString() }
-                    : q
-            ));
+        // If server returned a qid for a newly created question, update the question id and mark persisted
+        const published = qid ? { ...questionForReview, id: qid, isPersisted: true, timestamp: new Date().toISOString() } : { ...questionForReview, isEdited: true, timestamp: new Date().toISOString(), isPersisted: questionForReview.isPersisted ?? false };
+
+        if (published.id && questions.some(q => q.id === published.id)) {
+            setQuestions(prev => prev.map(q => q.id === published.id ? published : q));
         } else {
-            setQuestions(prev => [...prev, questionForReview]);
+            setQuestions(prev => [...prev, published]);
         }
 
         // Clear the review draft and the prompt text
@@ -516,17 +558,92 @@ const TeacherPage: React.FC = () => {
                 timestamp: q.timestamp,
             };
 
-            console.log('[Teacher] Publishing question to room:', currentRoomId);
-            console.log('[Teacher] Question payload:', JSON.stringify(payload, null, 2));
+            console.log('[Teacher] Enqueueing/publishing question to room:', currentRoomId);
 
-            if (socketServer && currentRoomId) {
-                socketServer.emit('quizRoomPostQuestion', currentRoomId, payload);
-                console.log('[Teacher] Emitted quizRoomPostQuestion');
-            } else {
+            if (!socketServer || !currentRoomId) {
                 console.warn('[Teacher] Cannot emit quizRoomPostQuestion - socket or roomId missing');
+                return;
+            }
+
+            // Determine whether there is an active question already
+            let hasActive = false;
+            setPublishedQuestions(prev => {
+                hasActive = prev.some(p => (p as any).active === true);
+                // Create the published entry; if there is already an active question, this one is queued (active: false)
+                // processed:false indicates it has not yet been marked inactive/processed by the teacher
+                const published = { ...q, publishedAt: Date.now(), active: !hasActive, processed: false } as any;
+                return [...prev, published];
+            });
+
+            // If there is no active question, immediately emit to students (activate this question)
+            if (!hasActive) {
+                socketServer.emit('quizRoomPostQuestion', currentRoomId, payload);
+                console.log('[Teacher] Emitted quizRoomPostQuestion (activated)');
+            } else {
+                console.log('[Teacher] Question queued (waiting for active slot)');
             }
         } catch (emitErr) {
-            console.error('[Teacher] Error emitting quizRoomPostQuestion:', emitErr);
+            console.error('[Teacher] Error enqueueing/emit quizRoomPostQuestion:', emitErr);
+        }
+    }, [socketServer, currentRoomId]);
+
+    // Handler to mark a published question inactive (teacher click). This will emit the
+    // canonical 'quizRoomQuestionInactive' event and then activate the next queued question if present.
+    const handleMarkQuestionInactive = useCallback(async (qid: string) => {
+        if (!socketServer || !currentRoomId) {
+            console.warn('[Teacher] Cannot mark inactive - socket or roomId missing');
+            return;
+        }
+
+        try {
+            console.log('[Teacher] Marking question inactive:', qid, 'for room', currentRoomId);
+            socketServer.emit('quizRoomQuestionInactive', currentRoomId, qid);
+
+            // Request aggregated stats for this question from the server.
+            // Server is expected to respond by emitting 'quizstats' (or variant) with a mapping of clientId -> correctCount
+            try {
+                socketServer.emit('quizRoomStats', currentRoomId, qid);
+                console.log('[Teacher] Requested quiz stats via quizRoomStats');
+            } catch (err) {
+                console.warn('[Teacher] Failed to request quiz stats:', err);
+            }
+
+            // Remove or mark the question inactive, then find the next queued question (first with active===false)
+            setPublishedQuestions(prev => {
+                // mark the specified question as processed/inactive and keep others
+                const updated = prev.map(p => ({ ...(p as any), active: (p as any).id === qid ? false : (p as any).active, processed: (p as any).id === qid ? true : (p as any).processed ?? false }));
+
+                // Find next queued (the earliest published with active === false and not processed)
+                const next = updated.find(p => !(p as any).active && !(p as any).processed);
+                if (next) {
+                    // Activate the next one
+                    const nextId = (next as any).id;
+                    // perform side-effect to emit next question
+                    setTimeout(() => {
+                        const qItem = (updated as any).find((x: any) => x.id === nextId);
+                        if (qItem) {
+                            const payload = {
+                                qid: qItem.id,
+                                question: qItem.text,
+                                options: qItem.options,
+                                correct: qItem.correct,
+                                explanation: qItem.explanation,
+                                topic: qItem.topic,
+                                timestamp: qItem.timestamp,
+                            };
+                            socketServer.emit('quizRoomPostQuestion', currentRoomId, payload);
+                            console.log('[Teacher] Activated next queued question:', nextId);
+                            // update state to mark it active
+                            setPublishedQuestions(lat => lat.map(item => ({ ...(item as any), active: (item as any).id === nextId ? true : (item as any).active })));
+                        }
+                    }, 50);
+                }
+
+                // Optionally, remove the inactive question from the list; for now keep it but mark inactive
+                return updated;
+            });
+        } catch (err) {
+            console.error('[Teacher] Failed to mark question inactive:', err);
         }
     }, [socketServer, currentRoomId]);
 
@@ -552,6 +669,36 @@ const TeacherPage: React.FC = () => {
         setQuestionForReview({ ...question }); 
         setError('');
     }, [quizActive]);
+
+    // Handler to create a blank question for manual authoring
+    const handleCreateBlankQuestion = useCallback(async () => {
+        const newQ: Question = {
+            id: generateUniqueId(),
+            text: '',
+            options: ['', '', '', ''],
+            correct: 0,
+            explanation: '',
+            topic: manualPrompt || '',
+            timestamp: new Date().toISOString(),
+            isPersisted: false,
+        };
+
+        // Try to save the draft to the server (POST) so it's persisted as a draft
+        try {
+            const { qid } = await saveQuestion(newQ);
+            const savedQ: Question = { ...newQ, id: qid, isPersisted: true, timestamp: new Date().toISOString() };
+            setQuestions(prev => [...prev, savedQ]);
+            setQuestionForReview(savedQ);
+        } catch (err) {
+            // If saving fails, fall back to local-only draft but show an error
+            console.error('Failed to save draft question:', err);
+            setError('Failed to save draft to server; draft created locally.');
+            setQuestions(prev => [...prev, newQ]);
+            setQuestionForReview(newQ);
+        }
+
+        setManualPrompt('');
+    }, [manualPrompt]);
 
     // API endpoint for deleting questions
     const DELETE_API_ENDPOINT = 'http://64.181.233.131:3677/question/delete';
@@ -633,6 +780,7 @@ const TeacherPage: React.FC = () => {
                             handleQuestionEdit={handleQuestionEdit}
                             handlePublishQuestion={handlePublishQuestion}
                             handleEmitQuestion={handleEmitQuestion}
+                            
                             handlePublishFromList={handlePublishFromList}
                             handleDiscardQuestion={handleDiscardQuestion}
                             questions={questions}
@@ -641,7 +789,12 @@ const TeacherPage: React.FC = () => {
                             manualPrompt={manualPrompt}
                             setManualPrompt={setManualPrompt}
                             handlePromptAiClick={handlePromptAiClick}
+                            handleCreateBlankQuestion={handleCreateBlankQuestion}
                         />
+                        {/* Published questions box */}
+                        <div className="p-6">
+                            <PublishedList published={publishedQuestions} roomId={currentRoomId} onMarkInactive={handleMarkQuestionInactive} />
+                        </div>
                     </div>
 
                     {/* Right Column: Overseer Panel (Leaderboard) */}
@@ -649,7 +802,8 @@ const TeacherPage: React.FC = () => {
                         <OverseerPanel
                             quizActive={quizActive}
                             questionsLength={questions.length}
-                            students={students}
+                            teacherSocket={socketServer}
+                            currentRoomId={currentRoomId}
                         />
                     </div>
                 </div>

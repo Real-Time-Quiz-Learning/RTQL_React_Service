@@ -27,7 +27,7 @@ const QuestionsList: React.FC<QuestionsListProps> = ({
     handlePublishQuestion 
 }) => (
     <div className="w-full mt-6">
-        <h3 className="text-xl font-extrabold text-gray-800 mb-3 text-left">Published Questions ({questions.length})</h3>
+        <h3 className="text-xl font-extrabold text-gray-800 mb-3 text-left">Questions ({questions.length})</h3>
         <div className="w-full max-h-60 overflow-y-auto bg-white p-4 border border-gray-300 rounded-xl text-left text-sm shadow-inner space-y-2">
             {questions.length > 0 ? (
                 // Displaying questions in reverse chronological order (most recent first)
