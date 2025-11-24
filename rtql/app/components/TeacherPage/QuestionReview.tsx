@@ -16,9 +16,12 @@ interface QuestionReviewProps {
     questionForReview: Question;
     questionsLength: number;
     handleQuestionEdit: (field: 'text' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
-    handlePublishQuestion: () => void;
+    handlePublishQuestion: () => void; // This is the original function passed from the parent
     handleDiscardQuestion: () => void;
 }
+
+// --- API Configuration ---
+const SAVE_API_ENDPOINT = 'http://64.181.233.131:3677/question/update';
 
 const QuestionReview: React.FC<QuestionReviewProps> = ({ 
     questionForReview, 
@@ -27,11 +30,52 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
     handlePublishQuestion, 
     handleDiscardQuestion 
 }) => {
-    // Check if we are in 'edit' mode (i.e., the question already has an ID)
+    
     const isEditing = !!questionForReview.id;
     
-    // Check if question text is present and all options are non-empty to enable publish
     const isPublishDisabled = !questionForReview.text || questionForReview.options.some(opt => !opt);
+
+    /**
+     * Defines the function to send the clean JSON format via POST request 
+     * before calling the parent's publish handler.
+     */
+    const handlePublishAndSend = async () => {
+        
+        // --- MODIFICATION START ---
+        // Include the question ID (qid) which is stored in questionForReview.id
+        const conciseQuestion = {
+            qid: questionForReview.id, // <-- ADDED: The database ID for the question
+            question: questionForReview.text,
+            options: questionForReview.options,
+            correct: questionForReview.correct
+        };
+        // --- MODIFICATION END ---
+        
+        console.log("Attempting to send data to server...");
+        console.log(JSON.stringify(conciseQuestion, null, 2));
+        console.log(typeof conciseQuestion)
+
+        const token = localStorage.getItem('token');
+        // NOTE: This token parsing logic is slightly inconsistent but preserved from your original code block.
+        const authtoken = token ? JSON.parse(token)["token"] || '' : '';
+
+        const response = await fetch(SAVE_API_ENDPOINT, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'authorization': 'Bearer ' + authtoken,
+            },
+            body: JSON.stringify(conciseQuestion),
+        });
+
+        // Optional: Log success message from server
+        const result = await response.json();
+        console.log("Question successfully saved to server:", result);
+        
+        // 2. Call the original prop function to update the parent state (publish/save)
+        handlePublishQuestion(); 
+
+    };
 
     return (
         <div className="w-full bg-white shadow-lg p-4 rounded-xl text-left border border-gray-200">
@@ -94,11 +138,11 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
                     {isEditing ? 'CANCEL EDIT' : 'Discard Draft'}
                 </button>
                 <button
-                    onClick={handlePublishQuestion}
+                    onClick={handlePublishAndSend} // <-- Now calls the async function to send data
                     className="px-4 py-2 text-sm rounded-full bg-indigo-600 text-white font-semibold transition hover:bg-indigo-700 shadow-lg disabled:bg-indigo-400 transform hover:scale-[1.02]"
                     disabled={isPublishDisabled}
                 >
-                    {isEditing ? 'UPDATE QUESTION' : 'PUBLISH'}
+                    {isEditing ? 'SAVE QUESTION' : 'PUBLISH'}
                 </button>
             </div>
         </div>

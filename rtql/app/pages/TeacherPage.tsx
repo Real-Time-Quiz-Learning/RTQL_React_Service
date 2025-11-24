@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { io } from "socket.io-client";
 import QuizStatusControl from '../components/TeacherPage/QuizStatusControl';
 import QuestionInput from '../components/TeacherPage/QuestionInput';
 import OverseerPanel from '../components/TeacherPage/OverseerPanel';
@@ -7,7 +8,7 @@ import AppFooter from '../components/layout/AppFooter';
 
 // --- Type Definitions ---
 interface Question {
-    id: string;
+    id: string; // This will now hold the database-returned QID after saving
     text: string;
     options: string[];
     correct: number; // Index of the correct option (0, 1, 2, or 3)
@@ -24,15 +25,6 @@ declare global {
     }
 }
 
-
-// --- Global Utilities ---
-const MOCK_USER_ID = 'teacher-12345-mock-id';
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const generateUniqueId = () => `q-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
-// --- API Configuration and Helper ---
-const API_ENDPOINT = 'http://64.181.233.131:3677/question/send';
-
 /**
  * Helper to safely retrieve the authentication token from localStorage.
  */
@@ -46,6 +38,14 @@ const getAuthToken = (): string | null => {
         return null;
     }
 };
+
+// --- Global Utilities ---
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const generateUniqueId = () => `q-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+// --- API Configuration and Helper ---
+const API_ENDPOINT = 'http://64.181.233.131:3677/question/send';
+const SAVE_API_ENDPOINT = 'http://64.181.233.131:3677/question/save';
 
 /**
  * Helper for fetching with exponential backoff.
@@ -77,7 +77,7 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 5): P
 /**
  * Calls the API, parses the nested response, and returns the first generated question.
  */
-const generateQuestion = async (prompt: string): Promise<Question> => {
+const generateQuestion = async (prompt: string): Promise<Question[]> => {
     const token = getAuthToken();
 
     const headers: Record<string, string> = {
@@ -107,25 +107,23 @@ const generateQuestion = async (prompt: string): Promise<Question> => {
         throw new Error("API returned an invalid format or no questions were generated. Check the response message for details.");
     }
 
-    const firstApiQuestion = questionsArray[0];
-
-    const newQuestion: Question = {
-        id: generateUniqueId(),
-        text: firstApiQuestion.question,
-        options: firstApiQuestion.options,
-        correct: firstApiQuestion.correct,
-
-        explanation: 'Explanation to be added by the teacher or AI upon request.',
-        topic: prompt,
-
-        timestamp: new Date().toISOString(),
-    };
-
-    if (!newQuestion.text || !Array.isArray(newQuestion.options) || newQuestion.options.length < 4) {
-        throw new Error("Invalid question structure returned from the AI.");
-    }
-
-    return newQuestion;
+    const newQuestions: Question[] = questionsArray.map((apiQuestion: any) => {        
+        return {
+            // NOTE: We still use the client-side ID initially as a placeholder
+            // until the question is successfully saved to the database.
+            id: generateUniqueId(), 
+            text: apiQuestion.question,
+            options: apiQuestion.options,
+            correct: apiQuestion.correct,
+            // Assuming the API might provide a proper explanation field later,
+            // or setting a default placeholder.
+            explanation: apiQuestion.explanation || 'Explanation to be added by the teacher or AI upon request.', 
+            topic: prompt,
+            timestamp: new Date().toISOString(),
+        };
+    })
+    
+    return newQuestions;
 };
 
 
@@ -136,6 +134,15 @@ const TeacherPage: React.FC = () => {
     const [quizActive, setQuizActive] = useState<boolean>(false);
     const [questions, setQuestions] = useState<Question[]>([]);
     const [questionForReview, setQuestionForReview] = useState<Question | null>(null);
+    const [currentRoomId, setCurrentRoomId] = useState<string>('');
+    const [authToken, setAuthToken] = useState<string | null>(null);
+    const [socketServer, setSocketServer] = useState<any>(null);
+
+    // Effect 1: Load Auth Token (Runs once on component mount)
+    useEffect(() => {
+        const token = getAuthToken();
+        setAuthToken(token);
+    }, []);
 
     // UI States for Generator
     const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -147,7 +154,84 @@ const TeacherPage: React.FC = () => {
     // Ref for the Speech Recognition Instance
     const recognitionRef = useRef<any>(null);
 
-    const userId: string = MOCK_USER_ID;
+    // Effect 2: Initialize Socket when Auth Token is ready
+    useEffect(() => {
+        // Only proceed if the authToken is a non-empty string AND the socket hasn't been created yet.
+        if (authToken && !socketServer) {
+            console.log("Initializing Socket.IO with token...");
+            
+            // Changed from 'let socket' to 'const newSocket'
+            const newSocket = io('http://64.181.233.131:3677/teacher', {
+                extraHeaders: { 
+                    authorization: `Bearer ${authToken}`
+                } 
+            });
+            // Set the active socket instance to state
+            setSocketServer(newSocket);
+
+            // Cleanup function to close the socket when the component unmounts
+            return () => {
+                console.log("Disconnecting socket on cleanup.");
+                newSocket.disconnect();
+            };
+        }
+    }, [authToken]);
+    
+    useEffect(() => {
+        if (!socketServer) return;
+
+        const handleRoomCreated = (roomId: string) => {
+            console.log("Quiz Room Created with ID:", roomId);
+            // Sets the actual room ID returned by the server
+            setCurrentRoomId(roomId); 
+        };
+
+        socketServer.on('quizRoomCreated', handleRoomCreated);
+
+        // Cleanup: remove the listener when the socket changes or component unmounts
+        return () => {
+            socketServer.off('quizRoomCreated', handleRoomCreated);
+        };
+    }, [socketServer]);
+
+    /**
+     * Saves the question to the API and returns the database-generated ID (qid).
+     * @param question The question object to save.
+     * @returns An object containing the API Response and the database ID (qid).
+     */
+    const saveQuestion = async (question: Question): Promise<{ response: Response, qid: string }> => {
+        const token = getAuthToken();
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        };
+
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        // The payload format required by the save API
+        const payload = {
+            question: question.text,
+            options: question.options,
+            correct: question.correct
+        };
+
+        // Use the existing robust fetchWithRetry helper
+        const response = await fetchWithRetry(SAVE_API_ENDPOINT, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(payload),
+        });
+
+        // --- MODIFICATION: Parse response to get the database-generated ID ---
+        const data = await response.json();
+        // Assuming the save API returns an object like { message: "Success", qid: "db-unique-id" }
+        // Use the returned qid, or fallback to the client-generated ID if qid is not present
+        const qid = data.qid || question.id; 
+
+        return { response, qid };
+    };
 
     // Triggers AI Generation based on a text prompt (voice or manual)
     const triggerAiQuestion = useCallback(async (prompt: string) => {
@@ -157,13 +241,35 @@ const TeacherPage: React.FC = () => {
         }
         // Ensure manualPrompt state reflects the latest prompt used for generation
         setManualPrompt(prompt);
-
         setIsGenerating(true);
         setError('');
 
         try {
-            const newQuestion = await generateQuestion(prompt);
-            setQuestionForReview(newQuestion);
+            const newQuestions = await generateQuestion(prompt);
+            if (newQuestions.length > 0) {
+                // Map over the newly generated questions and attempt to save them
+                const savedQuestions = await Promise.all(
+                    newQuestions.map(async (q) => {
+                        try {
+                            // --- MODIFICATION: Destructure the returned qid from saveQuestion ---
+                            const { qid } = await saveQuestion(q);
+                            console.log(`Successfully saved question with QID: ${qid}`);
+                            
+                            // Return the question object with the new database ID (qid)
+                            // replacing the temporary client-side ID (q.id)
+                            return { ...q, id: qid };
+                        } catch (saveError) {
+                            console.error(`Failed to save question ${q.id}:`, saveError);
+                            // If saving fails, return the question with its current client-side ID
+                            // so the user can review/retry.
+                            return q;
+                        }
+                    })
+                );
+                
+                // Add the array of questions (now containing the database QIDs) to the state
+                setQuestions(prev => [...prev, ...savedQuestions]);
+            }
         } catch (err) {
             console.error("AI Generation Error:", err);
             setError(`Failed to generate question. Error: ${err instanceof Error ? err.message : 'Unknown API error'}`);
@@ -260,13 +366,39 @@ const TeacherPage: React.FC = () => {
     // Handler for Quiz Activation/Deactivation
     const handleQuizControl = useCallback((willBeActive: boolean) => {
         setQuizActive(willBeActive);
+
+        // Check if socket is connected before emitting
+        if (willBeActive && !socketServer) {
+            console.error("Socket not connected. Cannot start quiz.");
+            setError("Error: Cannot start quiz. Socket connection failed or is not ready.");
+            setQuizActive(false); // Revert state
+            return;
+        }
+        
         if (!willBeActive) {
+            // Logic to end quiz
             setQuestionForReview(null);
             setIsRecording(false);
             setIsGenerating(false);
-            setManualPrompt('');
+            // The Room ID will be cleared if the quiz is ended
+            setCurrentRoomId(''); 
+            console.log("Quiz Ended. Room ID cleared.");
+            // Optional: socketServer.emit("quizRoomClose", { roomId: currentRoomId });
+        } else {
+            // Logic to start quiz
+            console.log("Quiz Started. Creating Room...");           
+            // Emit event to create a room on the server
+            socketServer.emit("quizRoomCreate");
+            
+            // The 'quizRoomCreated' listener (in the useEffect above) will handle 
+            // setting the actual currentRoomId when the server responds.
+            
+            setQuestionForReview(null);
+            setIsRecording(false);
+            setIsGenerating(false);
         }
-    }, []);
+    }, [socketServer]);
+
     const handleRecordingClick = async () => {
         if (isGenerating) return;
 
@@ -351,7 +483,8 @@ const TeacherPage: React.FC = () => {
             setError("Please start the quiz before attempting to edit questions.");
             return;
         }
-        setQuestionForReview({ ...question });
+        // Use a shallow copy to ensure we don't modify the state object directly
+        setQuestionForReview({ ...question }); 
         setError('');
     }, [quizActive]);
 
@@ -385,12 +518,13 @@ const TeacherPage: React.FC = () => {
                     <div className="flex flex-col text-left">
                         <h1 className="text-3xl font-extrabold text-gray-900">RTQL Teacher Dashboard</h1>
                         <p className="text-sm text-gray-500 mt-1">
-                            Room ID: <span className="font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md text-xs">{userId}</span>
+                            Room ID: <span className="font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md text-xs">{currentRoomId}</span>
                         </p>
                     </div>
                     <QuizStatusControl
                         quizActive={quizActive}
                         handleQuizControl={handleQuizControl}
+                        roomId={currentRoomId}
                     />
                 </header>
 

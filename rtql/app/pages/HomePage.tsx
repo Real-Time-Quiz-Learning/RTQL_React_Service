@@ -5,6 +5,7 @@ import AppFooter from '../components/layout/AppFooter';
 
 // Import Section Components
 import HeroSection from '../components/section/HeroSection';
+import JoinGameSection from '~/components/section/JoinGameSection';
 import FeatureSection from '../components/section/FeatureSection';
 import CallToActionSection from '../components/section/CallToActionSection';
 
@@ -13,9 +14,7 @@ const HomePage: React.FC = () => {
     <>
       <AppHeader />
       <main>
-        <HeroSection />
-        <FeatureSection />
-        <CallToActionSection />
+        <JoinGameSection />
       </main>
       <AppFooter />
     </>
