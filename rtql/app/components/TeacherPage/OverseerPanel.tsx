@@ -12,21 +12,30 @@ interface Student {
 interface OverseerPanelProps {
     quizActive: boolean;
     questionsLength: number;
+    // Optional students prop: if provided, the panel will display these live students
+    students?: Student[];
 }
 
 const MOCK_STUDENTS: Student[] = [
     { id: 's1', name: 'Alice', score: 5, time: 25, status: 'Active' },
 ];
 
-const OverseerPanel: React.FC<OverseerPanelProps> = ({ quizActive, questionsLength }) => {
-    const [studentData, setStudentData] = useState<Student[]>(MOCK_STUDENTS);
+const OverseerPanel: React.FC<OverseerPanelProps> = ({ quizActive, questionsLength, students }) => {
+    const [studentData, setStudentData] = useState<Student[]>(students ?? MOCK_STUDENTS);
     const [totalQuestions, setTotalQuestions] = useState<number>(questionsLength);
 
     useEffect(() => {
-        // Update total questions whenever the prop changes
         setTotalQuestions(questionsLength);
+    }, [questionsLength]);
 
-        // Mock real-time update logic
+    // If live students prop is provided, prefer it and skip mock updates.
+    useEffect(() => {
+        if (students) {
+            setStudentData(students);
+            return;
+        }
+
+        // Mock real-time update logic only when no live students are provided
         const interval = setInterval(() => {
             if (!quizActive) return; // Only update mock data if quiz is active
 
@@ -41,8 +50,7 @@ const OverseerPanel: React.FC<OverseerPanelProps> = ({ quizActive, questionsLeng
         }, 3000); // Update every 3 seconds
 
         return () => clearInterval(interval);
-    }, [questionsLength, quizActive]);
-
+    }, [questionsLength, quizActive, students]);
 
     const activeStudents = studentData.filter(s => s.status === 'Active').length;
     // Sort by score (descending) then time (ascending) for ranking

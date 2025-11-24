@@ -127,9 +127,7 @@ const generateQuestion = async (prompt: string): Promise<Question[]> => {
 };
 
 
-// -----------------------------------------------------------
-// Main App Component
-// -----------------------------------------------------------
+
 const TeacherPage: React.FC = () => {
     const [quizActive, setQuizActive] = useState<boolean>(false);
     const [questions, setQuestions] = useState<Question[]>([]);
@@ -137,6 +135,7 @@ const TeacherPage: React.FC = () => {
     const [currentRoomId, setCurrentRoomId] = useState<string>('');
     const [authToken, setAuthToken] = useState<string | null>(null);
     const [socketServer, setSocketServer] = useState<any>(null);
+    const [students, setStudents] = useState<Array<{id:string; name:string; score:number; time:number; status:'Active'|'Inactive'}>>([]);
 
     // Effect 1: Load Auth Token (Runs once on component mount)
     useEffect(() => {
@@ -183,16 +182,49 @@ const TeacherPage: React.FC = () => {
         const handleRoomCreated = (roomId: string) => {
             console.log("Quiz Room Created with ID:", roomId);
             // Sets the actual room ID returned by the server
-            setCurrentRoomId(roomId); 
+            setCurrentRoomId(roomId);
+        };
+
+        const handleStudentJoined = (payload: any) => {
+            const student = payload?.student ?? payload;
+            const room = payload?.roomId ?? payload?.room;
+            if (currentRoomId && room && room !== currentRoomId) return;
+            setStudents(prev => {
+                const exists = prev.find(s => s.id === student.id);
+                if (exists) {
+                    return prev.map(s => s.id === student.id ? { ...s, status: 'Active', name: student.name ?? s.name } : s);
+                }
+                return [...prev, { id: student.id, name: student.name ?? 'Student', score: 0, time: 0, status: 'Active' }];
+            });
+        };
+
+        const handleStudentLeft = (payload: any) => {
+            const studentId = payload?.studentId ?? payload?.id;
+            if (!studentId) return;
+            setStudents(prev => prev.filter(s => s.id !== studentId));
+        };
+
+        const handleStudentAnswer = (payload: any) => {
+            const sid = payload?.studentId ?? payload?.id;
+            const correct = payload?.correct;
+            const points = typeof payload?.points === 'number' ? payload.points : (correct ? 1 : 0);
+            if (!sid) return;
+            setStudents(prev => prev.map(s => s.id === sid ? { ...s, score: Math.min((s.score || 0) + points, questions.length) } : s));
         };
 
         socketServer.on('quizRoomCreated', handleRoomCreated);
+        socketServer.on('studentJoined', handleStudentJoined);
+        socketServer.on('studentLeft', handleStudentLeft);
+        socketServer.on('studentAnswer', handleStudentAnswer);
 
-        // Cleanup: remove the listener when the socket changes or component unmounts
+        // Cleanup: remove the listeners when socket changes or component unmounts
         return () => {
             socketServer.off('quizRoomCreated', handleRoomCreated);
+            socketServer.off('studentJoined', handleStudentJoined);
+            socketServer.off('studentLeft', handleStudentLeft);
+            socketServer.off('studentAnswer', handleStudentAnswer);
         };
-    }, [socketServer]);
+    }, [socketServer, currentRoomId, questions.length]);
 
     /**
      * Saves the question to the API and returns the database-generated ID (qid).
@@ -452,7 +484,7 @@ const TeacherPage: React.FC = () => {
         });
     }, [questionForReview]);
 
-    // Handler to publish or update the question
+    // Handler to publish or update the question (updates UI/state only)
     const handlePublishQuestion = useCallback(() => {
         if (!questionForReview) return;
 
@@ -471,6 +503,39 @@ const TeacherPage: React.FC = () => {
         setManualPrompt('');
     }, [questionForReview, questions]);
 
+    // Dedicated emitter: only emits a live question to students when explicitly requested
+    const handleEmitQuestion = useCallback((q: Question) => {
+        try {
+            const payload = {
+                qid: q.id,
+                question: q.text,
+                options: q.options,
+                correct: q.correct,
+                explanation: q.explanation,
+                topic: q.topic,
+                timestamp: q.timestamp,
+            };
+
+            console.log('[Teacher] Publishing question to room:', currentRoomId);
+            console.log('[Teacher] Question payload:', JSON.stringify(payload, null, 2));
+
+            if (socketServer && currentRoomId) {
+                socketServer.emit('quizRoomPostQuestion', currentRoomId, payload);
+                console.log('[Teacher] Emitted quizRoomPostQuestion');
+            } else {
+                console.warn('[Teacher] Cannot emit quizRoomPostQuestion - socket or roomId missing');
+            }
+        } catch (emitErr) {
+            console.error('[Teacher] Error emitting quizRoomPostQuestion:', emitErr);
+        }
+    }, [socketServer, currentRoomId]);
+
+    // Handler invoked by the QuestionsList when teacher clicks Publish on an existing question
+    const handlePublishFromList = useCallback((q: Question) => {
+        // Emit only; the question already exists in `questions` state
+        handleEmitQuestion(q);
+    }, [handleEmitQuestion]);
+
     // Handler to discard the question draft/cancel edit
     const handleDiscardQuestion = useCallback(() => {
         setQuestionForReview(null);
@@ -488,16 +553,40 @@ const TeacherPage: React.FC = () => {
         setError('');
     }, [quizActive]);
 
-    // Handler to delete a published question
-    const handleDeleteQuestion = useCallback((id: string) => {
+    // API endpoint for deleting questions
+    const DELETE_API_ENDPOINT = 'http://64.181.233.131:3677/question/delete';
+
+    // Handler to delete a published question (deletes on server then updates UI)
+    const handleDeleteQuestion = useCallback(async (id: string) => {
         const userConfirmed = window.confirm("Are you sure you want to delete this question?");
-        if (userConfirmed) {
+        if (!userConfirmed) return;
+
+        // Build auth headers
+        const token = getAuthToken();
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        };
+        if (token) headers['authorization'] = `Bearer ${token}`;
+
+        try {
+            // Call server delete (using the project's fetchWithRetry helper)
+            await fetchWithRetry(DELETE_API_ENDPOINT, {
+                method: 'DELETE',
+                headers,
+                body: JSON.stringify({ qid: id }),
+            });
+
+            // On success, remove from local state
             setQuestions(prev => prev.filter(q => q.id !== id));
-            if (questionForReview && questionForReview.id === id) {
-                setQuestionForReview(null);
-            }
+
+            // If currently viewing/editing the deleted question, clear it
+            setQuestionForReview(prev => (prev && prev.id === id ? null : prev));
+        } catch (err) {
+            console.error('Failed to delete question:', err);
+            setError(`Failed to delete question: ${err instanceof Error ? err.message : String(err)}`);
+            alert('Failed to delete question. See console for details.');
         }
-    }, [questionForReview]);
+    }, [setQuestions, setQuestionForReview]);
 
     // Handler for Manual Prompt Input
     const handlePromptAiClick = () => {
@@ -543,6 +632,8 @@ const TeacherPage: React.FC = () => {
                             handleRecordingClick={handleRecordingClick}
                             handleQuestionEdit={handleQuestionEdit}
                             handlePublishQuestion={handlePublishQuestion}
+                            handleEmitQuestion={handleEmitQuestion}
+                            handlePublishFromList={handlePublishFromList}
                             handleDiscardQuestion={handleDiscardQuestion}
                             questions={questions}
                             handleEditQuestion={handleEditQuestion}
@@ -558,6 +649,7 @@ const TeacherPage: React.FC = () => {
                         <OverseerPanel
                             quizActive={quizActive}
                             questionsLength={questions.length}
+                            students={students}
                         />
                     </div>
                 </div>

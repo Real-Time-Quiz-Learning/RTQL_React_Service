@@ -15,10 +15,17 @@ interface Question {
 interface QuestionsListProps {
     questions: Question[];
     handleEditQuestion: (question: Question) => void;
-    handleDeleteQuestion: (id: string) => void;
+    handleDeleteQuestion: (id: string) => Promise<void> | void;
+    // New handler for the 'Publish' action
+    handlePublishQuestion: (question: Question) => void; 
 }
 
-const QuestionsList: React.FC<QuestionsListProps> = ({ questions, handleEditQuestion, handleDeleteQuestion }) => (
+const QuestionsList: React.FC<QuestionsListProps> = ({ 
+    questions, 
+    handleEditQuestion, 
+    handleDeleteQuestion,
+    handlePublishQuestion 
+}) => (
     <div className="w-full mt-6">
         <h3 className="text-xl font-extrabold text-gray-800 mb-3 text-left">Published Questions ({questions.length})</h3>
         <div className="w-full max-h-60 overflow-y-auto bg-white p-4 border border-gray-300 rounded-xl text-left text-sm shadow-inner space-y-2">
@@ -32,6 +39,14 @@ const QuestionsList: React.FC<QuestionsListProps> = ({ questions, handleEditQues
                             {q.text}
                         </p>
                         <div className="flex space-x-3 flex-shrink-0 ml-4">
+                            {/* NEW PUBLISH BUTTON */}
+                            <button 
+                                onClick={() => handlePublishQuestion(q)}
+                                className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full font-semibold transition hover:bg-green-200"
+                            >
+                                Publish
+                            </button>
+                            {/* END NEW PUBLISH BUTTON */}
                             <button 
                                 onClick={() => handleEditQuestion(q)}
                                 className="text-xs px-2 py-1 bg-indigo-100 text-indigo-700 rounded-full font-semibold transition hover:bg-indigo-200"

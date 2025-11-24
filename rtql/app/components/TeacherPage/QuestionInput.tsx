@@ -28,9 +28,13 @@ interface QuestionInputProps {
     handleRecordingClick: () => Promise<void>;
     handleQuestionEdit: (field: 'text' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
     handlePublishQuestion: () => void;
+    // Emit a live publish event for students (room + socket handled by parent)
+    handleEmitQuestion?: (question: Question) => void;
+    // Publish an existing question from the list (emits only)
+    handlePublishFromList?: (question: Question) => void;
     handleDiscardQuestion: () => void;
     handleEditQuestion: (question: Question) => void;
-    handleDeleteQuestion: (id: string) => void;
+    handleDeleteQuestion: (id: string) => Promise<void> | void;
     setManualPrompt: React.Dispatch<React.SetStateAction<string>>;
     handlePromptAiClick: () => void;
 }
@@ -40,7 +44,8 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
     questionForReview, handleRecordingClick, handleQuestionEdit, 
     handlePublishQuestion, handleDiscardQuestion, questions,
     handleEditQuestion, handleDeleteQuestion,
-    manualPrompt, setManualPrompt, handlePromptAiClick
+    manualPrompt, setManualPrompt, handlePromptAiClick,
+    handleEmitQuestion, handlePublishFromList
 }) => {
 
     const questionsLength = questions.length;
@@ -63,7 +68,9 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                     questionsLength={questionsLength}
                     handleQuestionEdit={handleQuestionEdit}
                     handlePublishQuestion={handlePublishQuestion}
+                    handleEmitQuestion={handleEmitQuestion}
                     handleDiscardQuestion={handleDiscardQuestion}
+                    handleDeleteQuestion={handleDeleteQuestion}
                 />
             ) : (
                 // Show the input controls otherwise
@@ -136,6 +143,7 @@ const QuestionInput: React.FC<QuestionInputProps> = ({
                 questions={questions} 
                 handleEditQuestion={handleEditQuestion} 
                 handleDeleteQuestion={handleDeleteQuestion}
+                handlePublishQuestion={(q) => handlePublishFromList ? handlePublishFromList(q) : undefined}
             />
 
         </div>

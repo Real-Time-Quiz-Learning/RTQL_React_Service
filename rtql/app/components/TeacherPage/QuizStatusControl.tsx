@@ -12,8 +12,8 @@ const QuizStatusControl: React.FC<QuizStatusControlProps> = ({ quizActive, handl
     onClick={() => handleQuizControl(!quizActive)}
     className={`px-4 py-2 rounded-full text-sm font-bold text-white transition duration-150 shadow-md ${
       quizActive
-        ? 'bg-red-600 hover:bg-red-700' // Use red for destructive/stop action
-        : 'bg-indigo-600 hover:bg-indigo-700' // Use indigo for primary start action
+        ? 'bg-red-600 hover:bg-red-700' 
+        : 'bg-indigo-600 hover:bg-indigo-700' 
     } transform hover:scale-[1.02]`}
   >
     {quizActive ? `END QUIZ` : 'START QUIZ'}

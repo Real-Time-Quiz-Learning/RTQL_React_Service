@@ -2,7 +2,7 @@ import React from 'react';
 
 // --- Type Definitions ---
 interface Question {
-    id: string;
+    id: string; // This is the qid from the database
     text: string;
     options: string[];
     correct: number;
@@ -16,8 +16,11 @@ interface QuestionReviewProps {
     questionForReview: Question;
     questionsLength: number;
     handleQuestionEdit: (field: 'text' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
-    handlePublishQuestion: () => void; // This is the original function passed from the parent
-    handleDiscardQuestion: () => void;
+    handlePublishQuestion: () => void; // Original function for success/publish
+    // Called when a publish action should emit the live question to students
+    handleEmitQuestion?: (question: Question) => void;
+    handleDiscardQuestion: () => void; // This is the original function passed from the parent for local state update
+    handleDeleteQuestion: (id: string) => Promise<void> | void; // Parent handler that will delete on server and update UI
 }
 
 // --- API Configuration ---
@@ -28,7 +31,9 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
     questionsLength, 
     handleQuestionEdit, 
     handlePublishQuestion, 
-    handleDiscardQuestion 
+    handleEmitQuestion,
+    handleDiscardQuestion,
+    handleDeleteQuestion,
 }) => {
     
     const isEditing = !!questionForReview.id;
@@ -41,41 +46,77 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
      */
     const handlePublishAndSend = async () => {
         
-        // --- MODIFICATION START ---
-        // Include the question ID (qid) which is stored in questionForReview.id
         const conciseQuestion = {
-            qid: questionForReview.id, // <-- ADDED: The database ID for the question
+            qid: questionForReview.id, 
             question: questionForReview.text,
             options: questionForReview.options,
             correct: questionForReview.correct
         };
-        // --- MODIFICATION END ---
         
         console.log("Attempting to send data to server...");
         console.log(JSON.stringify(conciseQuestion, null, 2));
-        console.log(typeof conciseQuestion)
 
         const token = localStorage.getItem('token');
-        // NOTE: This token parsing logic is slightly inconsistent but preserved from your original code block.
         const authtoken = token ? JSON.parse(token)["token"] || '' : '';
 
-        const response = await fetch(SAVE_API_ENDPOINT, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                'authorization': 'Bearer ' + authtoken,
-            },
-            body: JSON.stringify(conciseQuestion),
-        });
+        try {
+            const response = await fetch(SAVE_API_ENDPOINT, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'authorization': 'Bearer ' + authtoken,
+                },
+                body: JSON.stringify(conciseQuestion),
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
 
-        // Optional: Log success message from server
-        const result = await response.json();
-        console.log("Question successfully saved to server:", result);
-        
-        // 2. Call the original prop function to update the parent state (publish/save)
-        handlePublishQuestion(); 
+            // Optional: Log success message from server
+            const result = await response.json();
+            console.log("Question successfully saved to server:", result);
+            
+            // If this is a publish (not an edit), emit to students first
+            if (!isEditing && typeof handleEmitQuestion === 'function') {
+                try {
+                    handleEmitQuestion(conciseQuestion as unknown as Question);
+                    console.log('[QuestionReview] Emitted live publish via parent handler');
+                } catch (e) {
+                    console.error('[QuestionReview] Error emitting live publish:', e);
+                }
+            }
 
+            // Call the original prop function to update the parent state (publish/save)
+            handlePublishQuestion(); 
+
+        } catch (error) {
+            console.error("Failed to save question:", error);
+            alert("Failed to save question. See console for details.");
+        }
     };
+
+    /**
+     * Handles deletion of an existing question by sending a DELETE request 
+     * with the qid in the payload, then calls the parent's discard handler.
+     */
+    const handleDeleteAndDiscard = async () => {
+        if (!isEditing || !questionForReview.id) {
+            handleDiscardQuestion();
+            return;
+        }
+
+        try {
+            // Delegate server deletion + UI update to parent handler
+            await handleDeleteQuestion(questionForReview.id);
+            // After parent has removed from list, also clear the review draft and manual prompt via parent's discard handler
+            handleDiscardQuestion();
+        } catch (error) {
+            console.error("Failed to delete question via parent handler:", error);
+            alert("Failed to delete question. See console for details.");
+        }
+    };
+
 
     return (
         <div className="w-full bg-white shadow-lg p-4 rounded-xl text-left border border-gray-200">
@@ -94,7 +135,7 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
             
             {/* Explanation Display/Placeholder */}
             <div className="text-xs text-gray-600 mb-3 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
-              {isEditing 
+             {isEditing 
                 ? 'Note: The original explanation is not available during edit. You can add a new one here if needed.'
                 : `Model Explanation: ${questionForReview.explanation || 'No explanation provided by AI.'}`}
             </div>
@@ -132,13 +173,13 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
             {/* Publish / Discard Buttons */}
             <div className="flex justify-between space-x-3 mt-5 pt-4 border-t border-gray-100">
                 <button
-                    onClick={handleDiscardQuestion}
+                    onClick={handleDeleteAndDiscard} // <-- CHANGED: Now calls the async function
                     className="px-4 py-2 text-sm rounded-full border border-gray-300 text-gray-700 font-semibold transition hover:bg-gray-100 shadow-sm"
                 >
-                    {isEditing ? 'CANCEL EDIT' : 'Discard Draft'}
+                    {isEditing ? 'DELETE QUESTION' : 'Discard Draft'}
                 </button>
                 <button
-                    onClick={handlePublishAndSend} // <-- Now calls the async function to send data
+                    onClick={handlePublishAndSend} 
                     className="px-4 py-2 text-sm rounded-full bg-indigo-600 text-white font-semibold transition hover:bg-indigo-700 shadow-lg disabled:bg-indigo-400 transform hover:scale-[1.02]"
                     disabled={isPublishDisabled}
                 >
