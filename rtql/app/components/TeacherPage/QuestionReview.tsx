@@ -1,23 +1,12 @@
 import React from 'react';
+import type { Question } from '../types/global';
 
 // --- Type Definitions ---
-interface Question {
-    qid: string;
-    id: string; // This is the qid from the database
-    text: string;
-    options: string[];
-    correct: number;
-    explanation: string;
-    topic: string;
-    timestamp: string;
-    isEdited?: boolean;
-    isPersisted?: boolean; // true when saved to DB
-}
 
 interface QuestionReviewProps {
     questionForReview: Question;
     questionsLength: number;
-    handleQuestionEdit: (field: 'text' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
+    handleQuestionEdit: (field: 'question' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
     // Parent handler called after a successful save/update; if qid provided it's a new save
     handlePublishQuestion: (qid?: string) => void; // Original function for success/publish
     // Called when a publish action should emit the live question to students
@@ -43,7 +32,7 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
     // Consider a question 'editing' (already persisted) only if it's flagged as persisted
     const isEditing = !!questionForReview.isPersisted;
     
-    const isPublishDisabled = !questionForReview.text || questionForReview.options.some(opt => !opt);
+    const isPublishDisabled = !questionForReview.question || questionForReview.options.some(opt => !opt);
 
     /**
      * Defines the function to send the clean JSON format via POST request 
@@ -53,7 +42,7 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
         
         const conciseQuestion = {
             qid: questionForReview.id,
-            question: questionForReview.text,
+            question: questionForReview.question,
             options: questionForReview.options,
             correct: questionForReview.correct
         };
@@ -68,6 +57,8 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
             let qid: string | undefined = undefined;
             if (isEditing) {
                 // Existing question: update via PUT
+
+                // FIRST UPDATE THE QUESTION
                 const response = await fetch(UPDATE_API_ENDPOINT, {
                     method: 'PUT',
                     headers: {
@@ -79,6 +70,9 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const result = await response.json();
                 console.log('Question successfully updated on server:', result);
+
+                // SECOND UPDATE THE RESPONSES
+                
             } else {
                 // New question: save via POST and obtain qid
                 const response = await fetch(SAVE_API_ENDPOINT, {
@@ -87,7 +81,7 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
                         'Content-Type': 'application/json',
                         'authorization': 'Bearer ' + authtoken,
                     },
-                    body: JSON.stringify({ question: questionForReview.text, options: questionForReview.options, correct: questionForReview.correct }),
+                    body: JSON.stringify({ question: questionForReview.question, options: questionForReview.options, correct: questionForReview.correct }),
                 });
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
@@ -144,8 +138,8 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
             
             {/* Question Text Area */}
             <textarea
-                value={questionForReview.text}
-                onChange={(e) => handleQuestionEdit('text', e.target.value)}
+                value={questionForReview.question}
+                onChange={(e) => handleQuestionEdit('question', e.target.value)}
                 rows={2}
                 className="w-full border border-gray-300 rounded-lg p-3 mb-3 text-sm text-gray-900 focus:ring-indigo-500 shadow-inner resize-none"
                 placeholder="Edit the question text..."
@@ -155,7 +149,7 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
             <div className="text-xs text-gray-600 mb-3 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
              {isEditing 
                 ? 'Note: The original explanation is not available during edit. You can add a new one here if needed.'
-                : `Model Explanation: ${questionForReview.explanation || 'No explanation provided by AI.'}`}
+                : `Model Explanation: ${questionForReview || 'No explanation provided by AI.'}`}
             </div>
 
             {/* Options and Correct Answer Selector */}

@@ -1,19 +1,5 @@
 import React from 'react';
-
-interface Question {
-    id: string;
-    text: string;
-    options: string[];
-    correct: number;
-    explanation: string;
-    topic: string;
-    timestamp: string;
-    isEdited?: boolean;
-    isPersisted?: boolean;
-    publishedAt?: number;
-    active?: boolean;
-    processed?: boolean;
-}
+import type { Question } from '../types/global';
 
 interface PublishedListProps {
     published: Question[];
@@ -32,11 +18,11 @@ const PublishedList: React.FC<PublishedListProps> = ({ published, roomId, onMark
                             <div className="flex items-center gap-3 flex-grow">
                                 <span className={`font-bold mr-2 text-sm flex-shrink-0 ${q.active ? 'text-green-600' : 'text-gray-500'}`}>P{published.length - i}</span>
                                 <p className="text-gray-800 font-medium">
-                                    {q.text || <span className="italic text-gray-400">(No question text)</span>}
+                                    {q.question || <span className="italic text-gray-400">(No question text)</span>}
                                 </p>
                                 {q.active ? (
                                     <span className="ml-3 px-2 py-1 text-xs font-semibold rounded bg-green-100 text-green-800">Active</span>
-                                ) : q.processed ? (
+                                ) : q.isPersisted ? (
                                     <span className="ml-3 px-2 py-1 text-xs font-semibold rounded bg-gray-100 text-gray-700">Inactive</span>
                                 ) : (
                                     <span className="ml-3 px-2 py-1 text-xs font-semibold rounded bg-yellow-50 text-yellow-700">Queued</span>
@@ -44,7 +30,7 @@ const PublishedList: React.FC<PublishedListProps> = ({ published, roomId, onMark
                             </div>
                             <div className="ml-4 text-right text-xs text-gray-500 flex items-center gap-3">
                                 <div>{q.publishedAt ? new Date(q.publishedAt).toLocaleTimeString() : ''}</div>
-                                {q.active && !q.processed && onMarkInactive && (
+                                {q.active && !q.isPersisted && onMarkInactive && (
                                     <button
                                         onClick={() => onMarkInactive(q.id)}
                                         className="px-3 py-1 bg-red-600 text-white rounded-md text-xs font-semibold hover:bg-red-700"

@@ -1,20 +1,7 @@
 import React from 'react';
 import QuestionReview from './QuestionReview';
 import QuestionsList from './QuestionList';
-
-// --- Type Definitions ---
-interface Question {
-    qid: string,
-    id: string;
-    text: string;
-    options: string[];
-    correct: number;
-    explanation: string;
-    topic: string;
-    timestamp: string;
-    isEdited?: boolean;
-    isPersisted?: boolean;
-}
+import type { Question } from '../types/global';
 
 interface QuestionInputProps {
     quizActive: boolean;
@@ -28,7 +15,7 @@ interface QuestionInputProps {
     
     // Handlers
     handleRecordingClick: () => Promise<void>;
-    handleQuestionEdit: (field: 'text' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
+    handleQuestionEdit: (field: 'question' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
     handlePublishQuestion: () => void;
     // Emit a live publish event for students (room + socket handled by parent)
     handleEmitQuestion?: (question: Question) => void;

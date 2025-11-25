@@ -15,7 +15,8 @@ interface Question {
   explanation?: string;
 }
 
-const SOCKET_BASE = 'http://64.181.233.131:3677/student';
+const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
+const SOCKET_BASE = `${API_BASE}/student`;
 const QUESTION_CORRECT = 'YOU GOT THE QUESTION RIGHT! 🎉🎉🎉';
 const QUESTION_INCORRECT = 'SORRY, THAT ANSWER IS INCORRECT. 😔';
 

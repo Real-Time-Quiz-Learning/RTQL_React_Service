@@ -1,17 +1,5 @@
 import React from 'react';
-
-// --- Type Definitions ---
-interface Question {
-    qid: string;
-    id: string;
-    text: string;
-    options: string[];
-    correct: number;
-    explanation: string;
-    topic: string;
-    timestamp: string;
-    isEdited?: boolean;
-}
+import type { Question } from '../types/global';
 
 interface QuestionsListProps {
     questions: Question[];
@@ -37,7 +25,7 @@ const QuestionsList: React.FC<QuestionsListProps> = ({
                         <p className="text-gray-800 flex-grow font-medium">
                             {/* Calculate the question number based on the total length and index */}
                             <span className="font-bold text-indigo-600 mr-3 text-sm flex-shrink-0">Q{questions.length - index}</span> 
-                            {q.text}
+                            {q.question}
                         </p>
                         <div className="flex space-x-3 flex-shrink-0 ml-4">
                             {/* NEW PUBLISH BUTTON */}

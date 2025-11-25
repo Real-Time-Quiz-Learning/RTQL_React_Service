@@ -3,7 +3,7 @@ import AuthHeader from './AuthHeader';
 import InputField from './InputField';
 import { useNavigate } from 'react-router-dom';
 
-const AUTH_API_BASE = import.meta.env.VITE_AUTH_API_BASE;
+const AUTH_API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
 
 interface LoginFormProps { onSwitch?: () => void }
 
