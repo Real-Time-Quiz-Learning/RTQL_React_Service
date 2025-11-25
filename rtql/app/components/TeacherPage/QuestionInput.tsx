@@ -4,6 +4,7 @@ import QuestionsList from './QuestionList';
 
 // --- Type Definitions ---
 interface Question {
+    qid: string,
     id: string;
     text: string;
     options: string[];

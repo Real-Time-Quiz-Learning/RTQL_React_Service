@@ -2,6 +2,7 @@ import React from 'react';
 
 // --- Type Definitions ---
 interface Question {
+    qid: string;
     id: string;
     text: string;
     options: string[];

@@ -16,6 +16,8 @@ interface Question {
 }
 
 const SOCKET_BASE = 'http://64.181.233.131:3677/student';
+const QUESTION_CORRECT = 'YOU GOT THE QUESTION RIGHT! 🎉🎉🎉';
+const QUESTION_INCORRECT = 'SORRY, THAT ANSWER IS INCORRECT. 😔';
 
 export default function StudentPage() {
   const [connected, setConnected] = useState(false);
@@ -77,13 +79,13 @@ export default function StudentPage() {
         const raw = Array.isArray(payload) && payload.length ? payload[0] : payload;
 
         // If payload wraps the question in a `question` property, use that object
-        const candidate = (raw && typeof raw === 'object' && (raw.question || raw.qid || raw.id)) ? raw : (raw?.question ? raw.question : raw);
+        const candidate = (raw && typeof raw === 'object' && (raw.question || raw.id || raw.qid)) ? raw : (raw?.question ? raw.question : raw);
 
         // If candidate is a primitive (string), wrap it into object
         const obj = (candidate && typeof candidate === 'object') ? candidate : { question: String(candidate) };
 
         const normalized: Question = {
-          id: obj.qid ?? obj.id ?? obj.questionId ?? '',
+          id: obj.id ?? obj.qid ?? obj.questionId ?? '',
           question: obj.question ?? obj.text ?? obj.prompt ?? '',
           options: obj.options ?? obj.choices ?? [],
           explanation: obj.explanation ?? obj.explain ?? '',
@@ -138,6 +140,17 @@ export default function StudentPage() {
         }
       });
 
+      socket.on('questionClosed', (payload: boolean) => {
+        console.log(payload);
+
+        let msg = (payload)
+          ? QUESTION_CORRECT
+          : QUESTION_INCORRECT;
+
+        console.log('[Student] received questionClosed', msg);
+        alert(msg);
+      });
+
       // Teacher may mark a question inactive. Listen for that and remove the question from the student's view.
       const handleQuestionInactive = (...args: any[]) => {
         // Scan args to find a qid candidate in multiple possible shapes
@@ -156,7 +169,7 @@ export default function StudentPage() {
             if (!foundQid) foundQid = a;
           } else if (typeof a === 'object') {
             // object may directly contain qid/id/questionId or a nested question
-            const candidate = a.qid ?? a.id ?? a.questionId ?? (a.question && (a.question.qid ?? a.question.id));
+            const candidate = a.id ?? a.qid ?? a.questionId ?? (a.question && (a.question.id ?? a.question.qid));
             if (candidate) {
               foundQid = candidate;
               break;
@@ -270,7 +283,7 @@ export default function StudentPage() {
 
     // Primary (requested) emit: roomId, { qid, response }
     try {
-      socketRef.current.emit('quizRoomPostQuestionAnswer', roomId, { qid: currentQuestion.id, response: selectedIndex });
+      socketRef.current.emit('quizRoomPostQuestionAnswer', roomId, { id: currentQuestion.id, response: selectedIndex });
     } catch (e) {
       console.warn('Primary emit failed:', e);
     }
