@@ -321,6 +321,30 @@ const TeacherPage: React.FC = () => {
         return { response, qid };
     };
 
+    /**
+     * Retrieve question by the database id.
+     * 
+     * @param id 
+     * @returns 
+     */
+    const getQuestion = async (id: number): Promise<Question> => {
+        const token = getAuthToken();
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        };
+
+        const url = new URL([API_ENDPOINT, id].join('/'));
+        const response = await fetchWithRetry(url.toString(), {
+            method: 'POST',
+            headers: headers,
+        });
+        const data = await response.json();
+
+        return data as Question;
+    };
+
     // Triggers AI Generation based on a text prompt (voice or manual)
     const triggerAiQuestion = useCallback(async (prompt: string) => {
         if (!prompt.trim()) {
@@ -338,23 +362,28 @@ const TeacherPage: React.FC = () => {
                 // Map over the newly generated questions and attempt to save them
                 const savedQuestions = await Promise.all(
                         newQuestions.map(async (q) => {
-                        try {
+                        // try {
                             // --- MODIFICATION: Destructure the returned qid from saveQuestion ---
-                            const { qid } = await saveQuestion(q);
-                            console.log(`Successfully saved question with QID: ${qid}`);
+                        const { qid } = await saveQuestion(q);
+                        const question = await getQuestion(parseInt(qid));
 
-                            // TODO
-                            // WO: would need to fetch the saved question here I guess and then add it to the array
-                            
-                            // Return the question object with the new database ID (qid)
-                            // replacing the temporary client-side ID (q.id)
-                            return { ...q, id: qid, isPersisted: true };
-                        } catch (saveError) {
-                            console.error(`Failed to save question ${q.id}:`, saveError);
-                            // If saving fails, return the question with its current client-side ID
-                            // so the user can review/retry.
-                            return q;
-                        }
+                        console.log(`Successfully saved question with QID: ${qid}`);
+                        console.log('New question', question);
+
+                        // TODO
+                        // WO: would need to fetch the saved question here I guess and then add it to the array
+                        
+                        // Return the question object with the new database ID (qid)
+                        // replacing the temporary client-side ID (q.id)
+                        // return { ...q, id: qid, isPersisted: true };
+
+                        return question;
+                        // } catch (saveError) {
+                        //     console.error(`Failed to save question ${q}:`, saveError);
+                        //     // If saving fails, return the question with its current client-side ID
+                        //     // so the user can review/retry.
+                        //     return q;
+                        // }
                     })
                 );
                 
@@ -529,8 +558,8 @@ const TeacherPage: React.FC = () => {
             if (!prev) return null;
 
             if (field === 'option' && optionIndex !== null && typeof value === 'string') {
-                const newOptions = [...prev.options];
-                newOptions[optionIndex] = value;
+                const newOptions = [...prev.responses];
+                newOptions[optionIndex].rtext = value;
                 return { ...prev, options: newOptions };
             }
             if (field === 'question' && typeof value === 'string') {
@@ -548,7 +577,7 @@ const TeacherPage: React.FC = () => {
         if (!questionForReview) return;
 
         // If server returned a qid for a newly created question, update the question id and mark persisted
-        const published = qid ? { ...questionForReview, id: qid, isPersisted: true, timestamp: new Date().toISOString() } : { ...questionForReview, isEdited: true, timestamp: new Date().toISOString(), isPersisted: questionForReview.isPersisted ?? false };
+        const published = qid ? { ...questionForReview, id: parseInt(qid), isPersisted: true, timestamp: new Date().toISOString() } : { ...questionForReview, isEdited: true, timestamp: new Date().toISOString(), isPersisted: questionForReview.isPersisted ?? false };
 
         if (published.id && questions.some(q => q.id === published.id)) {
             setQuestions(prev => prev.map(q => q.id === published.id ? published : q));
@@ -562,10 +591,9 @@ const TeacherPage: React.FC = () => {
     }, [questionForReview, questions]);
 
     // Dedicated emitter: only emits a live question to students when explicitly requested
-    const handleEmitQuestion = useCallback((q: Question) => {
+    const handleEmitQuestion = useCallback((q: ModelQuestion) => {
         try {
             const payload = {
-                qid: q.id,
                 question: q.question,
                 options: q.options,
                 correct: q.correct,
@@ -668,30 +696,25 @@ const TeacherPage: React.FC = () => {
 
     // Handler to create a blank question for manual authoring
     const handleCreateBlankQuestion = useCallback(async () => {
-        const newQ: Question = {
-            id: generateUniqueId(),
-            qid: generateUniqueId(),
+        const newQ: ModelQuestion = {
             question: '',
             options: ['', '', '', ''],
             correct: 0,
-            active: true,
-            publishedAt: new Date(),
-            timestamp: new Date().toISOString(),
-            isPersisted: false,
         };
 
         // Try to save the draft to the server (POST) so it's persisted as a draft
         try {
             const { qid } = await saveQuestion(newQ);
-            const savedQ: Question = { ...newQ, id: qid, isPersisted: true, timestamp: new Date().toISOString() };
+            const savedQ: Question = await getQuestion(parseInt(qid));
             setQuestions(prev => [...prev, savedQ]);
             setQuestionForReview(savedQ);
         } catch (err) {
             // If saving fails, fall back to local-only draft but show an error
             console.error('Failed to save draft question:', err);
-            setError('Failed to save draft to server; draft created locally.');
-            setQuestions(prev => [...prev, newQ]);
-            setQuestionForReview(newQ);
+            setError('Failed to save draft to server');
+
+            // setQuestions(prev => [...prev, newQ]);
+            // setQuestionForReview(newQ);
         }
 
         setManualPrompt('');
@@ -721,10 +744,10 @@ const TeacherPage: React.FC = () => {
             });
 
             // On success, remove from local state
-            setQuestions(prev => prev.filter(q => q.id !== id));
+            setQuestions(prev => prev.filter(q => q.id !== parseInt(id)));
 
             // If currently viewing/editing the deleted question, clear it
-            setQuestionForReview(prev => (prev && prev.id === id ? null : prev));
+            setQuestionForReview(prev => (prev && prev.id === parseInt(id) ? null : prev));
         } catch (err) {
             console.error('Failed to delete question:', err);
             setError(`Failed to delete question: ${err instanceof Error ? err.message : String(err)}`);
