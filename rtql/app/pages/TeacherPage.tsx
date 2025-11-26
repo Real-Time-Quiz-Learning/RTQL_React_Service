@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from "socket.io-client";
-import type { Question } from '../components/types/global';
+import type { ModelQuestion, Question, QuestionResponse } from '../components/types/global';
 import QuizStatusControl from '../components/TeacherPage/QuizStatusControl';
 import QuestionInput from '../components/TeacherPage/QuestionInput';
 import PublishedList from '../components/TeacherPage/PublishedList';
@@ -42,9 +42,9 @@ const generateUniqueId = () => `q-${Date.now()}-${Math.random().toString(36).sub
 // --- API Configuration and Helper ---
 
 const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
-const API_ENDPOINT = `${API_BASE}/question/send`;
-const SAVE_API_ENDPOINT = `${API_BASE}/question/save`;
-const DELETE_API_ENDPOINT = `${API_BASE}/question/delete`;
+const API_ENDPOINT = `${API_BASE}/question`;
+// const SAVE_API_ENDPOINT = `${API_BASE}/question/save`;
+// const DELETE_API_ENDPOINT = `${API_BASE}/question/delete`;
 
 const TEACHER_SOCKET = `${API_BASE}/teacher`;
 
@@ -78,7 +78,7 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 5): P
 /**
  * Calls the API, parses the nested response, and returns the first generated question.
  */
-const generateQuestion = async (prompt: string): Promise<Question[]> => {
+const generateQuestion = async (prompt: string): Promise<ModelQuestion[]> => {
     const token = getAuthToken();
 
     const headers: Record<string, string> = {
@@ -108,23 +108,17 @@ const generateQuestion = async (prompt: string): Promise<Question[]> => {
         throw new Error("API returned an invalid format or no questions were generated. Check the response message for details.");
     }
 
-    const newQuestions: Question[] = questionsArray.map((apiQuestion: any) => {        
+    // Will note,
+    // Models return a different format of question compared to the format used in the database
+    const newQuestions: ModelQuestion[] = questionsArray.map((apiQuestion: any) => {        
         return {
             // NOTE: We still use the client-side ID initially as a placeholder
             // until the question is successfully saved to the database.
-            id: generateUniqueId(),
-            qid: generateUniqueId(), 
-            question: apiQuestion.question,
-            options: apiQuestion.options,
-            correct: apiQuestion.correct,
-            // Assuming the API might provide a proper explanation field later,
-            // or setting a default placeholder.
-            explanation: apiQuestion.explanation || 'Explanation to be added by the teacher or AI upon request.', 
-            topic: prompt,
-            active: true,
-            timestamp: new Date().toISOString(),
+            question: apiQuestion.question as string,
+            options: apiQuestion.options as Array<string>,
+            correct: apiQuestion.correct as number,
         };
-    })
+    });
     
     return newQuestions;
 };
@@ -293,7 +287,7 @@ const TeacherPage: React.FC = () => {
      * @param question The question object to save.
      * @returns An object containing the API Response and the database ID (qid).
      */
-    const saveQuestion = async (question: Question): Promise<{ response: Response, qid: string }> => {
+    const saveQuestion = async (question: ModelQuestion): Promise<{ response: Response, qid: string }> => {
         const token = getAuthToken();
 
         const headers: Record<string, string> = {
@@ -312,7 +306,7 @@ const TeacherPage: React.FC = () => {
         };
 
         // Use the existing robust fetchWithRetry helper
-        const response = await fetchWithRetry(SAVE_API_ENDPOINT, {
+        const response = await fetchWithRetry(API_ENDPOINT, {
             method: 'POST',
             headers: headers,
             body: JSON.stringify(payload),
@@ -322,7 +316,7 @@ const TeacherPage: React.FC = () => {
         const data = await response.json();
         // Assuming the save API returns an object like { message: "Success", qid: "db-unique-id" }
         // Use the returned qid, or fallback to the client-generated ID if qid is not present
-        const qid = data.qid || question.id; 
+        const qid = data.id; 
 
         return { response, qid };
     };
@@ -348,6 +342,9 @@ const TeacherPage: React.FC = () => {
                             // --- MODIFICATION: Destructure the returned qid from saveQuestion ---
                             const { qid } = await saveQuestion(q);
                             console.log(`Successfully saved question with QID: ${qid}`);
+
+                            // TODO
+                            // WO: would need to fetch the saved question here I guess and then add it to the array
                             
                             // Return the question object with the new database ID (qid)
                             // replacing the temporary client-side ID (q.id)
@@ -716,7 +713,8 @@ const TeacherPage: React.FC = () => {
 
         try {
             // Call server delete (using the project's fetchWithRetry helper)
-            await fetchWithRetry(DELETE_API_ENDPOINT, {
+            const url = new URL([API_ENDPOINT, id].join('/'));
+            await fetchWithRetry(url.toString(), {
                 method: 'DELETE',
                 headers,
                 body: JSON.stringify({ qid: id }),
