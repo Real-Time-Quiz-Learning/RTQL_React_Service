@@ -2,21 +2,16 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import type { Question, QuestionResponse } from '../components/types/global';
 import AppHeader from '../components/layout/AppHeader'; // Added
 import AppFooter from '../components/layout/AppFooter'; // Added
 import OverseerPanel from '../components/TeacherPage/OverseerPanel';
 import { getSocket, createStudentSocket, setSocket } from '~/lib/socketClient';
 
-interface Question {
-  id: string;
-  question: string;
-  options: string[];
-  correct?: number; // teacher-side info may not be sent to students
-  explanation?: string;
-}
-
+const SOCKET_BASE = import.meta.env.VITE_BACKEND_SOCKET_BASE;
 const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
-const SOCKET_BASE = `${API_BASE}/student`;
+const STUDENT_SOCKET = `${SOCKET_BASE}/student`;
+
 const QUESTION_CORRECT = 'YOU GOT THE QUESTION RIGHT! 🎉🎉🎉';
 const QUESTION_INCORRECT = 'SORRY, THAT ANSWER IS INCORRECT. 😔';
 
@@ -86,10 +81,9 @@ export default function StudentPage() {
         const obj = (candidate && typeof candidate === 'object') ? candidate : { question: String(candidate) };
 
         const normalized: Question = {
-          id: obj.id ?? obj.qid ?? obj.questionId ?? '',
-          question: obj.question ?? obj.text ?? obj.prompt ?? '',
-          options: obj.options ?? obj.choices ?? [],
-          explanation: obj.explanation ?? obj.explain ?? '',
+          id: obj.id,
+          qtext: obj.qtext,
+          responses: obj.responses
         };
         return normalized;
       };
@@ -361,9 +355,9 @@ export default function StudentPage() {
               ) : currentQuestion ? (
                 /* Question Panel */
                 <div className='pt-2'>
-                  <h2 className="font-extrabold text-2xl text-gray-900 mb-4">{currentQuestion.question}</h2>
+                  <h2 className="font-extrabold text-2xl text-gray-900 mb-4">{currentQuestion.qtext}</h2>
                   <div className="space-y-3">
-                    {currentQuestion.options.map((opt, i) => (
+                    {currentQuestion.responses.map((opt, i) => (
                       // Apply distinct styling for selected/answered state
                       <button 
                         key={i} 
@@ -375,7 +369,7 @@ export default function StudentPage() {
                                     'bg-gray-50 hover:bg-gray-100 border-gray-300'}`} // Default state
                       >
                         <span className={`font-medium ${answered ? 'text-gray-800' : 'text-gray-700'}`}>
-                          {String.fromCharCode(65 + i)}. {opt}
+                          {String.fromCharCode(65 + i)}. {opt.rtext}
                         </span>
                       </button>
                     ))}

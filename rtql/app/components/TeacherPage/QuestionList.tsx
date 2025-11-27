@@ -4,7 +4,7 @@ import type { Question } from '../types/global';
 interface QuestionsListProps {
     questions: Question[];
     handleEditQuestion: (question: Question) => void;
-    handleDeleteQuestion: (id: string) => Promise<void> | void;
+    handleDeleteQuestion: (id: number) => Promise<void> | void;
     // New handler for the 'Publish' action
     handlePublishQuestion: (question: Question) => void; 
 }
@@ -25,7 +25,7 @@ const QuestionsList: React.FC<QuestionsListProps> = ({
                         <p className="text-gray-800 flex-grow font-medium">
                             {/* Calculate the question number based on the total length and index */}
                             <span className="font-bold text-indigo-600 mr-3 text-sm flex-shrink-0">Q{questions.length - index}</span> 
-                            {q.question}
+                            {q.qtext}
                         </p>
                         <div className="flex space-x-3 flex-shrink-0 ml-4">
                             {/* NEW PUBLISH BUTTON */}

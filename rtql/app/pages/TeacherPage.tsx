@@ -41,6 +41,7 @@ const generateUniqueId = () => `q-${Date.now()}-${Math.random().toString(36).sub
 
 // --- API Configuration and Helper ---
 
+const SOCKET_BASE = import.meta.env.VITE_BACKEND_SOCKET_BASE;
 const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
 const API_ENDPOINT = `${API_BASE}/question`;
 // const SAVE_API_ENDPOINT = `${API_BASE}/question/save`;
@@ -166,7 +167,7 @@ const TeacherPage: React.FC = () => {
             console.log("Initializing Socket.IO with token...");
             
             // Changed from 'let socket' to 'const newSocket'
-            const newSocket = io(TEACHER_SOCKET, {
+            const newSocket = io(`${SOCKET_BASE}/teacher`, {
                 extraHeaders: { 
                     authorization: `Bearer ${authToken}`
                 } 
@@ -337,10 +338,10 @@ const TeacherPage: React.FC = () => {
 
         const url = new URL([API_ENDPOINT, id].join('/'));
         const response = await fetchWithRetry(url.toString(), {
-            method: 'POST',
+            method: 'GET',
             headers: headers,
         });
-        const data = await response.json();
+        const data = (await response.json()).data;
 
         return data as Question;
     };
@@ -551,23 +552,32 @@ const TeacherPage: React.FC = () => {
     // ----------------------------------------------------------------------
 
     // Handler for editing the draft question
-    const handleQuestionEdit = useCallback((field: 'question' | 'correct' | 'option', value: string | number, optionIndex: number | null = null) => {
+    const handleQuestionEdit = useCallback((field: 'qtext' | 'correct' | 'responses', value: string | number, optionIndex: number | null = null) => {
         if (!questionForReview) return;
 
         setQuestionForReview(prev => {
             if (!prev) return null;
 
-            if (field === 'option' && optionIndex !== null && typeof value === 'string') {
+            if (field === 'responses' && optionIndex !== null && typeof value === 'string') {
                 const newOptions = [...prev.responses];
                 newOptions[optionIndex].rtext = value;
-                return { ...prev, options: newOptions };
+                return { ...prev, responses: newOptions };
             }
-            if (field === 'question' && typeof value === 'string') {
+            if (field === 'qtext' && typeof value === 'string') {
                 return { ...prev, [field]: value };
             }
             if (field === 'correct' && typeof value === 'number') {
-                return { ...prev, [field]: value };
+                return {
+                    ...prev,
+                    responses: prev.responses.map((response, idx) => ({
+                        ...response,
+                        correct: idx === value
+                    }))
+                };
             }
+
+            console.log('[TEACHER] updating question', prev);
+
             return prev;
         });
     }, [questionForReview]);
@@ -591,13 +601,12 @@ const TeacherPage: React.FC = () => {
     }, [questionForReview, questions]);
 
     // Dedicated emitter: only emits a live question to students when explicitly requested
-    const handleEmitQuestion = useCallback((q: ModelQuestion) => {
+    const handleEmitQuestion = useCallback((q: Question) => {
         try {
             const payload = {
-                question: q.question,
-                options: q.options,
-                correct: q.correct,
-                timestamp: q.timestamp,
+                id: q.id,
+                qtext: q.qtext,
+                responses: q.responses,
             };
             console.log('[Teacher] Enqueueing/publishing question to room:', currentRoomId);
 
@@ -614,20 +623,20 @@ const TeacherPage: React.FC = () => {
 
     // Handler to mark a published question inactive (teacher click). This will emit the
     // canonical 'quizRoomQuestionInactive' event and then activate the next queued question if present.
-    const handleMarkQuestionInactive = useCallback(async (qid: string) => {
+    const handleMarkQuestionInactive = useCallback(async (publishedId: number) => {
         if (!socketServer || !currentRoomId) {
             console.warn('[Teacher] Cannot mark inactive - socket or roomId missing');
             return;
         }
 
         try {
-            console.log('[Teacher] Marking question inactive:', qid, 'for room', currentRoomId);
-            socketServer.emit('quizRoomQuestionInactive', currentRoomId, qid);
+            console.log('[Teacher] Marking question inactive:', publishedId, 'for room', currentRoomId);
+            socketServer.emit('quizRoomQuestionInactive', currentRoomId, publishedId);
 
             // Request aggregated stats for this question from the server.
             // Server is expected to respond by emitting 'quizstats' (or variant) with a mapping of clientId -> correctCount
             try {
-                socketServer.emit('quizRoomStats', currentRoomId, qid);
+                socketServer.emit('quizRoomStats', currentRoomId);
                 console.log('[Teacher] Requested quiz stats via quizRoomStats');
             } catch (err) {
                 console.warn('[Teacher] Failed to request quiz stats:', err);
@@ -636,7 +645,7 @@ const TeacherPage: React.FC = () => {
             // Remove or mark the question inactive, then find the next queued question (first with active===false)
             setPublishedQuestions(prev => {
                 // mark the specified question as processed/inactive and keep others
-                const updated = prev.map(p => ({ ...(p as any), active: (p as any).id === qid ? false : (p as any).active, processed: (p as any).id === qid ? true : (p as any).processed ?? false }));
+                const updated = prev.map(p => ({ ...(p as any), active: (p as any).publishedId === publishedId ? false : (p as any).active, processed: (p as any).publishedId === publishedId ? true : (p as any).processed ?? false }));
 
                 // Find next queued (the earliest published with active === false and not processed)
                 const next = updated.find(p => !(p as any).active && !(p as any).processed);
@@ -723,7 +732,7 @@ const TeacherPage: React.FC = () => {
     // API endpoint for deleting questions
 
     // Handler to delete a published question (deletes on server then updates UI)
-    const handleDeleteQuestion = useCallback(async (id: string) => {
+    const handleDeleteQuestion = useCallback(async (id: number) => {
         const userConfirmed = window.confirm("Are you sure you want to delete this question?");
         if (!userConfirmed) return;
 
@@ -744,10 +753,10 @@ const TeacherPage: React.FC = () => {
             });
 
             // On success, remove from local state
-            setQuestions(prev => prev.filter(q => q.id !== parseInt(id)));
+            setQuestions(prev => prev.filter(q => q.id !== id));
 
             // If currently viewing/editing the deleted question, clear it
-            setQuestionForReview(prev => (prev && prev.id === parseInt(id) ? null : prev));
+            setQuestionForReview(prev => (prev && prev.id === id ? null : prev));
         } catch (err) {
             console.error('Failed to delete question:', err);
             setError(`Failed to delete question: ${err instanceof Error ? err.message : String(err)}`);

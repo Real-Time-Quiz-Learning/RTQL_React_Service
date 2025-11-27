@@ -4,6 +4,10 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createStudentSocket, setSocket, getSocket } from '~/lib/socketClient';
 
+const SOCKET_BASE = import.meta.env.VITE_BACKEND_SOCKET_BASE;
+const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
+const STUDENT_SOCKET = `${SOCKET_BASE}/student`;
+
 const JoinGameSection: React.FC = () => {
   const [userName, setUserName] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -35,7 +39,7 @@ const JoinGameSection: React.FC = () => {
         setSocket(null);
       }
       // Create the socket and store it in a shared module so it survives route changes.
-      const socket = createStudentSocket('http://64.181.233.131:3677/student');
+      const socket = createStudentSocket(STUDENT_SOCKET);
       setSocket(socket);
       console.log('[Join] Created student socket, connected=', socket.connected);
       setJoinStatus('socket-created');

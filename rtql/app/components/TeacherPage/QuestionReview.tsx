@@ -6,18 +6,21 @@ import type { Question } from '../types/global';
 interface QuestionReviewProps {
     questionForReview: Question;
     questionsLength: number;
-    handleQuestionEdit: (field: 'question' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
+    handleQuestionEdit: (field: 'qtext' | 'correct' | 'responses', value: string | number, optionIndex?: number | null) => void;
     // Parent handler called after a successful save/update; if qid provided it's a new save
     handlePublishQuestion: (qid?: string) => void; // Original function for success/publish
     // Called when a publish action should emit the live question to students
     handleEmitQuestion?: (question: Question) => void;
     handleDiscardQuestion: () => void; // This is the original function passed from the parent for local state update
-    handleDeleteQuestion: (id: string) => Promise<void> | void; // Parent handler that will delete on server and update UI
+    handleDeleteQuestion: (id: number) => Promise<void> | void; // Parent handler that will delete on server and update UI
 }
 
 // --- API Configuration ---
-const UPDATE_API_ENDPOINT = 'http://64.181.233.131:3677/question/update';
-const SAVE_API_ENDPOINT = 'http://64.181.233.131:3677/question/save';
+// const UPDATE_API_ENDPOINT = 'http://64.181.233.131:3677/question/update';
+// const SAVE_API_ENDPOINT = 'http://64.181.233.131:3677/question/save';
+
+const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
+const API_ENDPOINT = `${API_BASE}/question`;
 
 const QuestionReview: React.FC<QuestionReviewProps> = ({ 
     questionForReview, 
@@ -32,7 +35,9 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
     // Consider a question 'editing' (already persisted) only if it's flagged as persisted
     const isEditing = !!questionForReview.isPersisted;
     
-    const isPublishDisabled = !questionForReview.question || questionForReview.options.some(opt => !opt);
+    const isPublishDisabled = !questionForReview.qtext || questionForReview.responses.some(opt => !opt);
+
+    console.log(questionForReview);
 
     /**
      * Defines the function to send the clean JSON format via POST request 
@@ -41,10 +46,7 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
     const handlePublishAndSend = async () => {
         
         const conciseQuestion = {
-            qid: questionForReview.id,
-            question: questionForReview.question,
-            options: questionForReview.options,
-            correct: questionForReview.correct
+            qtext: questionForReview.qtext,
         };
         
         console.log("Attempting to send data to server...");
@@ -55,49 +57,64 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
 
         try {
             let qid: string | undefined = undefined;
-            if (isEditing) {
+            // if (isEditing) {
                 // Existing question: update via PUT
 
-                // FIRST UPDATE THE QUESTION
-                const response = await fetch(UPDATE_API_ENDPOINT, {
+            // FIRST UPDATE THE QUESTION
+            const url = new URL([API_ENDPOINT, questionForReview.id].join('/'));
+            const response = await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'authorization': 'Bearer ' + authtoken,
+                },
+                body: JSON.stringify(conciseQuestion),
+            });
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const result = await response.json();
+            console.log('Question successfully updated on server:', result);
+
+            // SECOND UPDATE THE RESPONSES
+            for (const resp of questionForReview.responses) {
+                const url2 = new URL([API_ENDPOINT, questionForReview.id, 'response', resp.id].join('/'));
+                const response = await fetch(url2, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
-                        'authorization': 'Bearer ' + authtoken,
+                        'Authorization': 'Bearer ' + authtoken
                     },
-                    body: JSON.stringify(conciseQuestion),
+                    body: JSON.stringify(resp)
                 });
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) throw new Error(`HTTP error, status ${response.status}`);
                 const result = await response.json();
-                console.log('Question successfully updated on server:', result);
-
-                // SECOND UPDATE THE RESPONSES
-                
-            } else {
-                // New question: save via POST and obtain qid
-                const response = await fetch(SAVE_API_ENDPOINT, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'authorization': 'Bearer ' + authtoken,
-                    },
-                    body: JSON.stringify({ question: questionForReview.question, options: questionForReview.options, correct: questionForReview.correct }),
-                });
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                const data = await response.json();
-                qid = data.qid || undefined;
-                console.log('Question successfully saved on server, qid:', qid);
+                console.log('Question response successfullt updated on the server:', result);
             }
+                
+            // } else {
+                // New question: save via POST and obtain qid
+                // const response = await fetch(API_ENDPOINT, {
+                //     method: 'POST',
+                //     headers: {
+                //         'Content-Type': 'application/json',
+                //         'authorization': 'Bearer ' + authtoken,
+                //     },
+                //     body: JSON.stringify({ question: questionForReview.qtext, options: questionForReview.options }),
+                // });
+                // if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                // const data = await response.json();
+                // qid = data.qid || undefined;
+                // console.log('Question successfully saved on server, qid:', qid);
+            // }
 
             // If this is a publish (not an edit), emit to students first
-            if (!isEditing && typeof handleEmitQuestion === 'function') {
-                try {
-                    handleEmitQuestion(conciseQuestion as unknown as Question);
-                    console.log('[QuestionReview] Emitted live publish via parent handler');
-                } catch (e) {
-                    console.error('[QuestionReview] Error emitting live publish:', e);
-                }
-            }
+            // if (!isEditing && typeof handleEmitQuestion === 'function') {
+            //     try {
+            //         handleEmitQuestion(questionForReview);
+            //         console.log('[QuestionReview] Emitted live publish via parent handler');
+            //     } catch (e) {
+            //         console.error('[QuestionReview] Error emitting live publish:', e);
+            //     }
+            // }
 
             // Call the parent handler to update local UI state; pass qid when we created a new record
             handlePublishQuestion(qid);
@@ -138,8 +155,8 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
             
             {/* Question Text Area */}
             <textarea
-                value={questionForReview.question}
-                onChange={(e) => handleQuestionEdit('question', e.target.value)}
+                value={questionForReview.qtext}
+                onChange={(e) => handleQuestionEdit('qtext', e.target.value)}
                 rows={2}
                 className="w-full border border-gray-300 rounded-lg p-3 mb-3 text-sm text-gray-900 focus:ring-indigo-500 shadow-inner resize-none"
                 placeholder="Edit the question text..."
@@ -154,12 +171,12 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
 
             {/* Options and Correct Answer Selector */}
             <div className="space-y-3">
-                {questionForReview.options.map((opt, index) => (
+                {questionForReview.responses.map((opt, index) => (
                     <div key={index} className="flex items-center">
                         <input
                             type="radio"
                             name="correctOption"
-                            checked={questionForReview.correct === index}
+                            checked={opt.correct}
                             onChange={() => handleQuestionEdit('correct', index)}
                             className="h-5 w-5 text-green-600 border-gray-300 focus:ring-green-500 cursor-pointer"
                             id={`option-radio-${index}`}
@@ -169,10 +186,10 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
                         </label>
                         <input
                             type="text"
-                            value={opt}
-                            onChange={(e) => handleQuestionEdit('option', e.target.value, index)}
+                            value={opt.rtext}
+                            onChange={(e) => handleQuestionEdit('responses', e.target.value, index)}
                             className={`flex-grow border rounded-lg p-2 text-sm shadow-sm transition text-gray-900 ${
-                                questionForReview.correct === index
+                                opt.correct
                                     ? 'border-green-500 ring-2 ring-green-200 bg-green-50'
                                     : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'
                             }`}

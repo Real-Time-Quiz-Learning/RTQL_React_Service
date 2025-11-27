@@ -15,7 +15,7 @@ interface QuestionInputProps {
     
     // Handlers
     handleRecordingClick: () => Promise<void>;
-    handleQuestionEdit: (field: 'question' | 'correct' | 'option', value: string | number, optionIndex?: number | null) => void;
+    handleQuestionEdit: (field: 'qtext' | 'correct' | 'responses', value: string | number, optionIndex?: number | null) => void;
     handlePublishQuestion: () => void;
     // Emit a live publish event for students (room + socket handled by parent)
     handleEmitQuestion?: (question: Question) => void;
@@ -23,7 +23,7 @@ interface QuestionInputProps {
     handlePublishFromList?: (question: Question) => void;
     handleDiscardQuestion: () => void;
     handleEditQuestion: (question: Question) => void;
-    handleDeleteQuestion: (id: string) => Promise<void> | void;
+    handleDeleteQuestion: (id: number) => Promise<void> | void;
     setManualPrompt: React.Dispatch<React.SetStateAction<string>>;
     handlePromptAiClick: () => void;
     // Create a blank question for manual authoring

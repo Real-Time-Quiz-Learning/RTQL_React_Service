@@ -36,6 +36,7 @@ export interface Question {
   id: number;
   qtext: string;
   responses: Array<QuestionResponse>;
+  publishedId?: number;
   active?: boolean;
   timestamp?: string;
   isEdited?: boolean;
