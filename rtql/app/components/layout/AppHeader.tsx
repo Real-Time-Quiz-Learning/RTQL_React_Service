@@ -1,12 +1,32 @@
-"use client";
-
 import React, { useState, useEffect } from 'react';
 // Use react-router-dom Link for CRA
 import { Link } from 'react-router-dom';
 
+import type { AdminStats } from '../types/global';
+
+const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
+
+/**
+ * Helper to safely retrieve the authentication token from localStorage.
+ */
+const getAuthToken = (): string | null => {
+  try {
+    const localToken = localStorage.getItem("token");
+    const userToken = JSON.parse(localToken || 'null')?.token || null;
+    return userToken;
+  } catch (e) {
+    console.error("Could not access localStorage:", e);
+    return null;
+  }
+};
+
 const AppHeader: React.FC = () => {
   // 1. State to track the login status
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [adminButtonVisible, setIsAdminVisible] = useState(false);
+  const [adminStatsVisible, setIsAdminStatsVisible] = useState(false);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [adminStats, setAdminStats] = useState<AdminStats>();
 
   // 2. Function to handle user logout
   const handleLogout = () => {
@@ -18,17 +38,120 @@ const AppHeader: React.FC = () => {
     // window.location.href = '/'; // Simple hard refresh/navigation
   };
 
+  const handleShowAdmin = () => {
+    console.log('SHOWING THE API STATISTICS');
+  };
+
   // 3. useEffect hook to check local storage when the component mounts
   useEffect(() => {
     // Check if the 'token' exists in local storage
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     // Set the state based on the presence of the token
+    console.log(token);
     setIsLoggedIn(!!token);
+    setAuthToken(token);
   }, []); // The empty dependency array ensures this runs only once after the initial render
+
+  useEffect(() => {
+    const fetchAdminStats = async () => {
+      console.log(API_BASE);
+
+      const url = new URL([API_BASE, 'admin'].join('/'));
+      const resp = await fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          'authorization': `Bearer ${authToken}`
+        }
+      });
+      const rjson = await resp.json();
+
+      console.log(resp.ok);     // Check that the request did not fail
+      console.log(rjson);       // Debug, see the admin statistics response from the API
+      console.log(adminStats);
+
+      setAdminStats(rjson as AdminStats);
+    };
+    fetchAdminStats();
+  }, [adminStatsVisible]);
+
+  // 4. Use effect that determines whether the admin stats component will be visible
+  useEffect(() => {
+    const fetchAdminStats = async () => {
+      console.log(API_BASE);
+
+      const url = new URL([API_BASE, 'admin'].join('/'));
+      const resp = await fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          'authorization': `Bearer ${authToken}`
+        }
+      });
+      const rjson = await resp.json();
+
+      console.log(resp.ok);     // Check that the request did not fail
+      console.log(rjson);       // Debug, see the admin statistics response from the API
+
+      setIsAdminVisible(resp.ok);
+      setAdminStats(rjson as AdminStats);
+    };
+
+    fetchAdminStats();
+  }, [authToken]);
 
   return (
     <header className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+        {adminStatsVisible && <div className="absolute w-full h-screen left-0 right-0 top-0 z-1000">
+          <div className="w-full h-full left-0 right-0 top-0 bottom-0 flex items-center justify-center">
+            <div className="w-100 h-min-content bg-white rounded-xl shadow-2xl border text-black border-indigo-200 px-4 py-4 flex flex-col">
+              <div className="flex-grow">
+                <p>Total requests: {adminStats?.totalRequests}</p>
+                {<div>
+                  <table className="w-full text-sm text-left table-auto border-collapse">
+                    <thead>
+                      <tr className="bg-indigo-500 text-white uppercase">
+                        <th className="px-4 py-2 font-medium rounded-tl-lg">endpoint</th>
+                        <th className="px-4 py-2 font-medium">method</th>
+                        <th className="px-4 py-2 font-medium rounded-tr-lg">numRequests</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminStats?.endpointStats.map((us) =>
+                        Object.entries(us.methods).map((rec: [string, number], key) => <tr key={key} className="border-b border-gray-200 odd:bg-gray-50 hover:bg-indigo-100 transition duration-150">
+                          <td className="px-4 py-2">{us.endpoint}</td>
+                          <td className="px-4 py-2">{rec[0]}</td>
+                          <td className="px-4 py-2">{rec[1]}</td>
+                        </tr>)
+                      )}
+                    </tbody>
+                  </table>
+                </div>}
+                {<div>
+                  <table className="w-full text-sm text-left table-auto border-collapse">
+                    <thead>
+                      <tr className="bg-indigo-500 text-white uppercase">
+                        <td className="px-4 py-2 font-medium rounded-tl-lg">email</td>
+                        <td className="px-4 py-2 font-medium rounded-tr-lg">totalRequests</td>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminStats?.userStats.map((us, key) =>
+                        <tr key={key} className="border-b border-gray-200 odd:bg-gray-50 hover:bg-indigo-100 transition duration-150">
+                          <td className="px-4 py-2">{us.email}</td>
+                          <td className="px-4 py-2">{us.totalRequests}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>}
+              </div>
+              <button
+                className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-full hover:bg-indigo-700 transition shadow-md hover:shadow-lg transform hover:scale-[1.02] shrink-0"
+                onClick={() => setIsAdminStatsVisible(false)}>X</button>
+            </div>
+          </div>
+        </div>}
+
         {/* Use Link to navigate to the home route */}
         <Link to="/" className="text-2xl font-extrabold text-indigo-600 tracking-tight cursor-pointer">
           RTQL
@@ -36,7 +159,7 @@ const AppHeader: React.FC = () => {
             Real Time Quiz Learning
           </span>
         </Link>
-        
+
         {/* Navigation Links */}
         <nav className="hidden md:flex space-x-6 text-gray-600 font-medium">
           {/* These links remain anchor tags as they target sections within the home page */}
@@ -49,18 +172,24 @@ const AppHeader: React.FC = () => {
           {isLoggedIn ? (
             // If the user is logged in, show 'Start Quiz' and 'Logout'
             <>
+              {adminButtonVisible && <button
+                onClick={() => {
+                  
+                  setIsAdminStatsVisible(true)
+                }}
+                className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-full hover:bg-indigo-700 transition shadow-md hover:shadow-lg transform hover:scale-[1.02]">
+                Admin Page
+              </button>}
               {/* Button to start a quiz (assuming it's a logged-in feature) */}
-              <Link 
+              <Link
                 to="/teacher" // Change this to your actual quiz start route
-                className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-full hover:bg-indigo-700 transition shadow-md hover:shadow-lg transform hover:scale-[1.02]"
-              >
+                className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-full hover:bg-indigo-700 transition shadow-md hover:shadow-lg transform hover:scale-[1.02]">
                 Start Quiz
               </Link>
               {/* Logout Button */}
-              <button 
-                onClick={handleLogout} 
-                className="hidden sm:inline-flex px-4 py-2 text-sm font-medium text-indigo-600 bg-white border border-indigo-200 rounded-full hover:bg-indigo-50 transition shadow-sm"
-              >
+              <button
+                onClick={handleLogout}
+                className="hidden sm:inline-flex px-4 py-2 text-sm font-medium text-indigo-600 bg-white border border-indigo-200 rounded-full hover:bg-indigo-50 transition shadow-sm">
                 Log Out
               </button>
             </>
@@ -68,15 +197,15 @@ const AppHeader: React.FC = () => {
             // If the user is NOT logged in, show 'Log In / Sign Up' and 'Start Free Quiz'
             <>
               {/* Log In / Sign Up button */}
-              <Link 
-                to="/login" 
+              <Link
+                to="/login"
                 className="hidden sm:inline-flex px-4 py-2 text-sm font-medium text-indigo-600 bg-white border border-indigo-200 rounded-full hover:bg-indigo-50 transition shadow-sm"
               >
                 Log In / Sign Up
               </Link>
               {/* Start Free Quiz (directs to login to start) */}
-              <Link 
-                to="/login" 
+              <Link
+                to="/login"
                 className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-full hover:bg-indigo-700 transition shadow-md hover:shadow-lg transform hover:scale-[1.02]"
               >
                 Start Free Quiz
