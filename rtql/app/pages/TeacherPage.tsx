@@ -1,17 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from "socket.io-client";
-import type { ModelQuestion, Question, QuestionResponse } from '../components/types/global';
+import type { ModelQuestion, Question, RtqlMessage } from '../components/types/global';
 import QuizStatusControl from '../components/TeacherPage/QuizStatusControl';
 import QuestionInput from '../components/TeacherPage/QuestionInput';
 import PublishedList from '../components/TeacherPage/PublishedList';
 import OverseerPanel from '../components/TeacherPage/OverseerPanel';
 import AppHeader from '../components/layout/AppHeader';
 import AppFooter from '../components/layout/AppFooter';
-
-interface RtqlMessage {
-    message: string;
-    type: 'info' | 'warning' | 'error';
-}
 
 // This is necessary because SpeechRecognition is not standard in global type definitions.
 declare global {
@@ -20,6 +15,16 @@ declare global {
         webkitSpeechRecognition: any; // Allow the prefixed name
     }
 }
+
+// --- Global Utilities ---
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const generateUniqueId = () => `q-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+// --- API Configuration and Helper ---
+const SOCKET_BASE = import.meta.env.VITE_BACKEND_SOCKET_BASE;
+const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
+
+const TEACHER_SOCKET = `${API_BASE}/teacher`;
 
 /**
  * Helper to safely retrieve the authentication token from localStorage.
@@ -34,20 +39,6 @@ const getAuthToken = (): string | null => {
         return null;
     }
 };
-
-// --- Global Utilities ---
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const generateUniqueId = () => `q-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
-// --- API Configuration and Helper ---
-
-const SOCKET_BASE = import.meta.env.VITE_BACKEND_SOCKET_BASE;
-const API_BASE = import.meta.env.VITE_BACKEND_API_BASE;
-const API_ENDPOINT = `${API_BASE}/question`;
-// const SAVE_API_ENDPOINT = `${API_BASE}/question/save`;
-// const DELETE_API_ENDPOINT = `${API_BASE}/question/delete`;
-
-const TEACHER_SOCKET = `${API_BASE}/teacher`;
 
 /**
  * Helper for fetching with exponential backoff.
@@ -81,11 +72,9 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 5): P
  */
 const generateQuestion = async (prompt: string): Promise<ModelQuestion[]> => {
     const token = getAuthToken();
-
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
     };
-
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
     }
@@ -94,37 +83,87 @@ const generateQuestion = async (prompt: string): Promise<ModelQuestion[]> => {
         input: prompt,
         questions: 3
     };
-
-    const response = await fetchWithRetry(API_ENDPOINT, {
+    const url = new URL([API_BASE, 'model'].join('/'));
+    const response = await fetchWithRetry(url.toString(), {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(payload),
     });
-
     const data = await response.json();
-
     const questionsArray = data.questions;
 
     if (!Array.isArray(questionsArray) || questionsArray.length === 0) {
         throw new Error("API returned an invalid format or no questions were generated. Check the response message for details.");
     }
 
-    // Will note,
-    // Models return a different format of question compared to the format used in the database
-    const newQuestions: ModelQuestion[] = questionsArray.map((apiQuestion: any) => {        
-        return {
-            // NOTE: We still use the client-side ID initially as a placeholder
-            // until the question is successfully saved to the database.
-            question: apiQuestion.question as string,
-            options: apiQuestion.options as Array<string>,
-            correct: apiQuestion.correct as number,
-        };
+    return questionsArray as ModelQuestion[];
+};
+
+/**
+ * Saves the question to the API and returns the database-generated ID (qid).
+ * @param question The question object to save.
+ * @returns An object containing the API Response and the database ID (qid).
+ */
+const saveQuestion = async (question: ModelQuestion): Promise<{ response: Response, qid: string }> => {
+    const token = getAuthToken();
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+    };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    // The payload format required by the save API
+    const payload = {
+        question: question.question,
+        options: question.options,
+        correct: question.correct
+    };
+
+    // Use the existing robust fetchWithRetry helper
+    const url = new URL([API_BASE, 'question'].join('/'));
+    const response = await fetchWithRetry(url.toString(), {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(payload),
     });
-    
-    return newQuestions;
+
+    // --- MODIFICATION: Parse response to get the database-generated ID ---
+    const data = await response.json();
+    // Assuming the save API returns an object like { message: "Success", qid: "db-unique-id" }
+    // Use the returned qid, or fallback to the client-generated ID if qid is not present
+    const qid = data.id; 
+
+    return { response, qid };
+};
+
+/**
+ * Retrieve question by the database id.
+ * 
+ * @param id 
+ * @returns 
+ */
+const getQuestion = async (id: number): Promise<Question> => {
+    const token = getAuthToken();
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+    };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const url = new URL([API_BASE, 'question', id].join('/'));
+    const response = await fetchWithRetry(url.toString(), {
+        method: 'GET',
+        headers: headers,
+    });
+    const data = (await response.json()).data;
+
+    return data as Question;
 };
 
 
+// TEACHER PAGE COMPONENT
 
 const TeacherPage: React.FC = () => {
     const [quizActive, setQuizActive] = useState<boolean>(false);
@@ -144,21 +183,20 @@ const TeacherPage: React.FC = () => {
         status: 'Active'|'Inactive'
     }>>([]);
 
-    // Effect 1: Load Auth Token (Runs once on component mount)
-    useEffect(() => {
-        const token = getAuthToken();
-        setAuthToken(token);
-    }, []);
-
     // UI States for Generator
     const [isRecording, setIsRecording] = useState<boolean>(false);
     const [isGenerating, setIsGenerating] = useState<boolean>(false);
     // Transcribed text is now managed by manualPrompt
     const [manualPrompt, setManualPrompt] = useState<string>('');
     const [error, setError] = useState<string>('');
-
     // Ref for the Speech Recognition Instance
     const recognitionRef = useRef<any>(null);
+
+    // Effect 1: Load Auth Token (Runs once on component mount)
+    useEffect(() => {
+        const token = getAuthToken();
+        setAuthToken(token);
+    }, []);
 
     // Effect 2: Initialize Socket when Auth Token is ready
     useEffect(() => {
@@ -283,69 +321,6 @@ const TeacherPage: React.FC = () => {
         };
     }, [socketServer, currentRoomId, questions.length]);
 
-    /**
-     * Saves the question to the API and returns the database-generated ID (qid).
-     * @param question The question object to save.
-     * @returns An object containing the API Response and the database ID (qid).
-     */
-    const saveQuestion = async (question: ModelQuestion): Promise<{ response: Response, qid: string }> => {
-        const token = getAuthToken();
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-        };
-
-        if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-        }
-
-        // The payload format required by the save API
-        const payload = {
-            question: question.question,
-            options: question.options,
-            correct: question.correct
-        };
-
-        // Use the existing robust fetchWithRetry helper
-        const response = await fetchWithRetry(API_ENDPOINT, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(payload),
-        });
-
-        // --- MODIFICATION: Parse response to get the database-generated ID ---
-        const data = await response.json();
-        // Assuming the save API returns an object like { message: "Success", qid: "db-unique-id" }
-        // Use the returned qid, or fallback to the client-generated ID if qid is not present
-        const qid = data.id; 
-
-        return { response, qid };
-    };
-
-    /**
-     * Retrieve question by the database id.
-     * 
-     * @param id 
-     * @returns 
-     */
-    const getQuestion = async (id: number): Promise<Question> => {
-        const token = getAuthToken();
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        };
-
-        const url = new URL([API_ENDPOINT, id].join('/'));
-        const response = await fetchWithRetry(url.toString(), {
-            method: 'GET',
-            headers: headers,
-        });
-        const data = (await response.json()).data;
-
-        return data as Question;
-    };
-
     // Triggers AI Generation based on a text prompt (voice or manual)
     const triggerAiQuestion = useCallback(async (prompt: string) => {
         if (!prompt.trim()) {
@@ -363,28 +338,13 @@ const TeacherPage: React.FC = () => {
                 // Map over the newly generated questions and attempt to save them
                 const savedQuestions = await Promise.all(
                         newQuestions.map(async (q) => {
-                        // try {
-                            // --- MODIFICATION: Destructure the returned qid from saveQuestion ---
                         const { qid } = await saveQuestion(q);
                         const question = await getQuestion(parseInt(qid));
 
                         console.log(`Successfully saved question with QID: ${qid}`);
                         console.log('New question', question);
 
-                        // TODO
-                        // WO: would need to fetch the saved question here I guess and then add it to the array
-                        
-                        // Return the question object with the new database ID (qid)
-                        // replacing the temporary client-side ID (q.id)
-                        // return { ...q, id: qid, isPersisted: true };
-
                         return question;
-                        // } catch (saveError) {
-                        //     console.error(`Failed to save question ${q}:`, saveError);
-                        //     // If saving fails, return the question with its current client-side ID
-                        //     // so the user can review/retry.
-                        //     return q;
-                        // }
                     })
                 );
                 
@@ -396,7 +356,6 @@ const TeacherPage: React.FC = () => {
             setError(`Failed to generate question. Error: ${err instanceof Error ? err.message : 'Unknown API error'}`);
         } finally {
             setIsGenerating(false);
-            // Keep manualPrompt content for potential editing
         }
     }, []);
 
@@ -412,13 +371,10 @@ const TeacherPage: React.FC = () => {
             return;
         }
 
-
         const recognition = new SpeechRecognition();
-
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
-
         recognition.onresult = (event: any) => {
             let finalTranscript = '';
             let interimTranscript = '';
@@ -729,8 +685,6 @@ const TeacherPage: React.FC = () => {
         setManualPrompt('');
     }, [manualPrompt]);
 
-    // API endpoint for deleting questions
-
     // Handler to delete a published question (deletes on server then updates UI)
     const handleDeleteQuestion = useCallback(async (id: number) => {
         const userConfirmed = window.confirm("Are you sure you want to delete this question?");
@@ -745,18 +699,17 @@ const TeacherPage: React.FC = () => {
 
         try {
             // Call server delete (using the project's fetchWithRetry helper)
-            const url = new URL([API_ENDPOINT, id].join('/'));
+            const url = new URL([API_BASE, 'question', id].join('/'));
             await fetchWithRetry(url.toString(), {
                 method: 'DELETE',
-                headers,
-                body: JSON.stringify({ qid: id }),
+                headers
             });
 
             // On success, remove from local state
             setQuestions(prev => prev.filter(q => q.id !== id));
-
             // If currently viewing/editing the deleted question, clear it
             setQuestionForReview(prev => (prev && prev.id === id ? null : prev));
+
         } catch (err) {
             console.error('Failed to delete question:', err);
             setError(`Failed to delete question: ${err instanceof Error ? err.message : String(err)}`);

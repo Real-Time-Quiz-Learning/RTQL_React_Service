@@ -24,6 +24,7 @@ export default function StudentPage() {
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const currentQuestionRef = useRef<Question | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [selectedResponse, setSelectedResponse] = useState<number | null>(null);
   const [answered, setAnswered] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
 
@@ -60,78 +61,25 @@ export default function StudentPage() {
         socket.off('questionMarkedInactive');
         socket.off('markquestioninactive');
         socket.off('inactiveQuestion');
-  socket.off('questionClosed');
-  socket.off('closeQuestion');
-  socket.off('questionRemoved');
-  socket.off('questionremoved');
+        socket.off('questionClosed');
+        socket.off('closeQuestion');
+        socket.off('questionRemoved');
+        socket.off('questionremoved');
         socket.off('questionPosted');
         socket.off('questionposted');
-      } catch (e) {}
+      } catch (e) { }
 
-      // Helper to normalize various incoming question payload shapes
-      const parseIncomingQuestion = (payload: any): Question | null => {
-        if (!payload) return null;
-        // If server sends an array [question], pick first
-        const raw = Array.isArray(payload) && payload.length ? payload[0] : payload;
-
-        // If payload wraps the question in a `question` property, use that object
-        const candidate = (raw && typeof raw === 'object' && (raw.question || raw.id || raw.qid)) ? raw : (raw?.question ? raw.question : raw);
-
-        // If candidate is a primitive (string), wrap it into object
-        const obj = (candidate && typeof candidate === 'object') ? candidate : { question: String(candidate) };
-
-        const normalized: Question = {
-          id: obj.id,
-          qtext: obj.qtext,
-          responses: obj.responses
-        };
-        return normalized;
-      };
-
-      socket.on('QuestionPosted', (payload: any) => {
-        const normalized = parseIncomingQuestion(payload);
-        console.log('[Student] normalized QuestionPosted ->', normalized, 'raw:', payload);
-        if (normalized) {
-          setCurrentQuestion(normalized);
-          setSelectedIndex(null);
-          setAnswered(false);
-          setStatusMsg('New question posted');
-        }
-      });
-
-      // Some servers may forward the teacher event name directly to students
-      socket.on('quizRoomPostQuestion', (payload: any) => {
-        const normalized = parseIncomingQuestion(payload);
-        console.log('[Student] Received quizRoomPostQuestion:', payload, 'normalized:', normalized);
-        if (normalized) {
-          setCurrentQuestion(normalized);
-          setSelectedIndex(null);
-          setAnswered(false);
-          setStatusMsg('New question posted (quizRoomPostQuestion)');
-        }
-      });
+      console.log('[STUDENT] connection id debug', socket.id);
 
       // Some servers may use a different lowercase event name
       socket.on('questionPosted', (payload: any) => {
-        const normalized = parseIncomingQuestion(payload);
-        console.log('[Student] Received questionPosted:', payload, 'normalized:', normalized);
-        if (normalized) {
-          setCurrentQuestion(normalized);
+        console.log('[Student] Received questionPosted:', payload);
+        if (payload) {
+          setCurrentQuestion(payload);
           setSelectedIndex(null);
+          setSelectedResponse(null);
           setAnswered(false);
           setStatusMsg('New question posted (questionPosted)');
-        }
-      });
-
-      // also accept other casing
-      socket.on('questionposted', (payload: any) => {
-        const normalized = parseIncomingQuestion(payload);
-        console.log('[Student] Received questionposted:', payload, 'normalized:', normalized);
-        if (normalized) {
-          setCurrentQuestion(normalized);
-          setSelectedIndex(null);
-          setAnswered(false);
-          setStatusMsg('New question posted (questionposted)');
         }
       });
 
@@ -247,13 +195,16 @@ export default function StudentPage() {
         console.error('Socket error', err);
         setStatusMsg('Socket error: ' + String(err));
       });
-      
+
       // cleanup for new listeners will be handled in the off calls below
     };
 
 
     if (shared) {
       socketRef.current = shared;
+
+      console.log('[STUDENT] shared socket id', shared.id);
+      
       setupListeners(shared);
 
       setConnected(true);
@@ -275,10 +226,10 @@ export default function StudentPage() {
 
   const submitAnswer = () => {
     if (!socketRef.current || !currentQuestion || selectedIndex === null || answered) return;
-
+    console.log('[STUDENT] submitting answer', currentQuestion.publishedId, selectedIndex, selectedResponse);
     // Primary (requested) emit: roomId, { qid, response }
     try {
-      socketRef.current.emit('quizRoomPostQuestionAnswer', roomId, { id: currentQuestion.id, response: selectedIndex });
+      socketRef.current.emit('quizRoomPostQuestionAnswer', roomId, { publishedId: currentQuestion.publishedId, responseId: selectedResponse });
     } catch (e) {
       console.warn('Primary emit failed:', e);
     }
@@ -296,9 +247,9 @@ export default function StudentPage() {
       setConnected(false);
       setStatusMsg('Left room. Redirecting to Home...');
       // Give a slight delay for the message to show, then navigate
-      setTimeout(() => navigate('/'), 1500); 
+      setTimeout(() => navigate('/'), 1500);
     } else {
-        navigate('/'); // If no socket, just go home
+      navigate('/'); // If no socket, just go home
     }
   };
 
@@ -306,7 +257,7 @@ export default function StudentPage() {
     <>
       <AppHeader />
       <div className="min-h-screen bg-gray-100 font-sans p-4 sm:p-8">
-        <header className="bg-white p-4 rounded-t-xl shadow-lg flex justify-between items-center mb-6 border-t-8 border-green-600"> 
+        <header className="bg-white p-4 rounded-t-xl shadow-lg flex justify-between items-center mb-6 border-t-8 border-green-600">
           <div className="flex flex-col text-left">
             <h1 className="text-3xl font-extrabold text-gray-900">Student Quiz Portal</h1>
             <p className="text-sm text-gray-500 mt-1">
@@ -329,24 +280,24 @@ export default function StudentPage() {
 
             {/* Main Content Card */}
             <div className="bg-white p-6 rounded-xl shadow-xl border border-gray-200 space-y-4">
-              
+
               {/* Connection Status / Name Info */}
               <div className="flex justify-between items-center pb-4 border-b">
                 <div className='flex flex-col'>
-                    <p className="text-lg font-semibold text-gray-800">Welcome, <span className="font-extrabold text-green-600">{name || 'Guest'}</span>!</p>
-                    <p className="text-xs text-gray-500 italic mt-1">{statusMsg}</p>
-    
+                  <p className="text-lg font-semibold text-gray-800">Welcome, <span className="font-extrabold text-green-600">{name || 'Guest'}</span>!</p>
+                  <p className="text-xs text-gray-500 italic mt-1">{statusMsg}</p>
+
                 </div>
                 <button onClick={handleLeaveRoom} className="text-sm text-red-600 hover:text-red-800 transition duration-150 ease-in-out">
-                    Leave Room
+                  Leave Room
                 </button>
               </div>
 
               {!connected ? (
                 <div className="text-center p-6 bg-red-50 rounded-lg">
                   <p className="text-base text-red-700 mb-4">You must join a quiz room to participate.</p>
-                  <button 
-                    onClick={() => navigate('/')} 
+                  <button
+                    onClick={() => navigate('/')}
                     className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition duration-200"
                   >
                     Go to Home Page to Join
@@ -359,14 +310,17 @@ export default function StudentPage() {
                   <div className="space-y-3">
                     {currentQuestion.responses.map((opt, i) => (
                       // Apply distinct styling for selected/answered state
-                      <button 
-                        key={i} 
-                        onClick={() => !answered && setSelectedIndex(i)} 
+                      <button
+                        key={i}
+                        onClick={() => {
+                          !answered && setSelectedIndex(i);
+                          !answered && setSelectedResponse(opt.id);
+                        }}
                         disabled={answered}
                         className={`block w-full text-left p-4 border rounded-lg transition duration-200 ease-in-out 
                                     ${answered && selectedIndex === i ? 'bg-green-100 border-green-500 shadow-md' : // Answered and selected
-                                    selectedIndex === i ? 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-300 shadow-lg' : // Selected, not yet answered
-                                    'bg-gray-50 hover:bg-gray-100 border-gray-300'}`} // Default state
+                            selectedIndex === i ? 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-300 shadow-lg' : // Selected, not yet answered
+                              'bg-gray-50 hover:bg-gray-100 border-gray-300'}`} // Default state
                       >
                         <span className={`font-medium ${answered ? 'text-gray-800' : 'text-gray-700'}`}>
                           {String.fromCharCode(65 + i)}. {opt.rtext}
@@ -375,14 +329,14 @@ export default function StudentPage() {
                     ))}
                   </div>
                   <div className="flex space-x-3 mt-6">
-                    <button 
-                      onClick={submitAnswer} 
-                      disabled={answered || selectedIndex === null} 
+                    <button
+                      onClick={submitAnswer}
+                      disabled={answered || selectedIndex === null}
                       className={`px-6 py-3 font-bold rounded-lg transition duration-200 ease-in-out 
-                                  ${(answered || selectedIndex === null) 
-                                    ? 'bg-gray-300 text-gray-600 cursor-not-allowed' 
-                                    : 'bg-green-600 text-white hover:bg-green-700 shadow-md'}`
-                                }
+                                  ${(answered || selectedIndex === null)
+                          ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                          : 'bg-green-600 text-white hover:bg-green-700 shadow-md'}`
+                      }
                     >
                       {answered ? 'Answer Submitted' : 'Submit Answer'}
                     </button>
@@ -404,15 +358,15 @@ export default function StudentPage() {
               )}
             </div>
             {/* End Main Content Card */}
-              {/* Overseer Panel: show student-facing view of live stats */}
-              <div className="mt-6">
-                <OverseerPanel
-                  quizActive={true}
-                  questionsLength={0}
-                  teacherSocket={socketRef.current}
-                  currentRoomId={roomId}
-                />
-              </div>
+            {/* Overseer Panel: show student-facing view of live stats */}
+            <div className="mt-6">
+              <OverseerPanel
+                quizActive={true}
+                questionsLength={0}
+                teacherSocket={socketRef.current}
+                currentRoomId={roomId}
+              />
+            </div>
           </div>
         </div>
 

@@ -75,20 +75,21 @@ const QuestionReview: React.FC<QuestionReviewProps> = ({
             console.log('Question successfully updated on server:', result);
 
             // SECOND UPDATE THE RESPONSES
-            for (const resp of questionForReview.responses) {
-                const url2 = new URL([API_ENDPOINT, questionForReview.id, 'response', resp.id].join('/'));
-                const response = await fetch(url2, {
+            const updateResponses = questionForReview.responses.map(r => {
+                const url2 = new URL([API_ENDPOINT, questionForReview.id, 'response', r.id].join('/'));
+                return fetch(url2, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': 'Bearer ' + authtoken
                     },
-                    body: JSON.stringify(resp)
+                    body: JSON.stringify(r)
                 });
-                if (!response.ok) throw new Error(`HTTP error, status ${response.status}`);
-                const result = await response.json();
-                console.log('Question response successfullt updated on the server:', result);
-            }
+            });
+
+            await Promise.all(updateResponses);
+
+            console.log('Question response successfullt updated on the server:', result);
                 
             // } else {
                 // New question: save via POST and obtain qid

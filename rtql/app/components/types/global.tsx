@@ -43,3 +43,8 @@ export interface Question {
   publishedAt?: Date;
   isPersisted?: boolean;
 }
+
+export interface RtqlMessage {
+    message: string;
+    type: 'info' | 'warning' | 'error';
+}
