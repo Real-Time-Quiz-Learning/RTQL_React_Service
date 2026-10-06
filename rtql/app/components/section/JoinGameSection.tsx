@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { createStudentSocket, setSocket, getSocket } from '~/lib/socketClient';
 
 const SOCKET_BASE = import.meta.env.VITE_BACKEND_SOCKET_BASE;

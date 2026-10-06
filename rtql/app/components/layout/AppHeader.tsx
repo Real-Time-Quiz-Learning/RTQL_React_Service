@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 // Use react-router-dom Link for CRA
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import type { AdminStats } from '../types/global';
 
